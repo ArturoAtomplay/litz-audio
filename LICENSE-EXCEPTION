@@ -1,0 +1,23 @@
+Litz Audio is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE.
+
+Additional permission under GNU GPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or combining it
+with the Google Mobile Ads SDK, the Google User Messaging Platform SDK, or the
+Google Play services libraries they depend on (or modified versions of those
+libraries), containing parts covered by the terms of their respective
+licenses, the licensors of this Program grant you additional
+permission to convey the resulting work. Corresponding Source for a non-source
+form of such a combination need not include the source code of those
+libraries.
+
+This permission covers only those libraries. Every other part of the
+combination stays under the GNU General Public License. As section 7 allows,
+you may remove this additional permission from your copy of the Program, or
+from any work based on it.
+
+Contributions to this repository are accepted under the GNU General Public
+License version 3 or later together with this additional permission.

@@ -1,0 +1,26 @@
+# Maintainer: Litz Audio contributors
+# AUR package built from the GitHub release tarball. After bumping pkgver,
+# run `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`.
+pkgname=litz-audio-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Use your Android phone as a microphone and listen to your computer'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ArturoAtomplay/litz-audio'
+license=('GPL-3.0-or-later')
+depends=('pipewire' 'glibc' 'gcc-libs')
+provides=('litz-audio')
+conflicts=('litz-audio')
+source_x86_64=("https://github.com/ArturoAtomplay/litz-audio/releases/download/v$pkgver/litz-$pkgver-linux-x86_64.tar.gz")
+source_aarch64=("https://github.com/ArturoAtomplay/litz-audio/releases/download/v$pkgver/litz-$pkgver-linux-aarch64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  cd "litz-$pkgver-linux-$CARCH"
+  install -Dm755 bin/litzd "$pkgdir/usr/bin/litzd"
+  install -Dm644 share/litz/DeepFilterNet3_onnx.tar.gz -t "$pkgdir/usr/share/litz"
+  install -Dm644 share/licenses/litz/* -t "$pkgdir/usr/share/licenses/$pkgname"
+  sed 's|%h/.local/bin|/usr/bin|' share/systemd/user/litzd.service |
+    install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/litzd.service"
+}

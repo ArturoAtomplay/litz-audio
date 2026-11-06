@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector android:width="108dp" android:height="108dp"
+            android:viewportWidth="108" android:viewportHeight="108">
+            <path android:name="bar0" android:fillColor="#FFFFFF" android:pathData="M33.75,51.75A2.25,2.25 0 0 1 38.25,51.75L38.25,56.25A2.25,2.25 0 0 1 33.75,56.25Z" />
+            <path android:name="bar1" android:fillColor="#FFFFFF" android:pathData="M42.75,50.25A2.25,2.25 0 0 1 47.25,50.25L47.25,57.75A2.25,2.25 0 0 1 42.75,57.75Z" />
+            <path android:name="bar2" android:fillColor="#FFFFFF" android:pathData="M51.75,51A2.25,2.25 0 0 1 56.25,51L56.25,57A2.25,2.25 0 0 1 51.75,57Z" />
+            <path android:name="bar3" android:fillColor="#FFFFFF" android:pathData="M60.75,49.5A2.25,2.25 0 0 1 65.25,49.5L65.25,58.5A2.25,2.25 0 0 1 60.75,58.5Z" />
+            <path android:name="bar4" android:fillColor="#FFFFFF" android:pathData="M69.75,51.375A2.25,2.25 0 0 1 74.25,51.375L74.25,56.625A2.25,2.25 0 0 1 69.75,56.625Z" />
+        </vector>
+    </aapt:attr>
+    <target android:name="bar0">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:propertyName="pathData" android:valueType="pathType"
+                android:valueFrom="M33.75,51.75A2.25,2.25 0 0 1 38.25,51.75L38.25,56.25A2.25,2.25 0 0 1 33.75,56.25Z"
+                android:valueTo="M33.75,45.75A2.25,2.25 0 0 1 38.25,45.75L38.25,62.25A2.25,2.25 0 0 1 33.75,62.25Z"
+                android:duration="420" android:startOffset="0"
+                android:repeatCount="infinite" android:repeatMode="reverse"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+        </aapt:attr>
+    </target>
+    <target android:name="bar1">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:propertyName="pathData" android:valueType="pathType"
+                android:valueFrom="M42.75,50.25A2.25,2.25 0 0 1 47.25,50.25L47.25,57.75A2.25,2.25 0 0 1 42.75,57.75Z"
+                android:valueTo="M42.75,39.75A2.25,2.25 0 0 1 47.25,39.75L47.25,68.25A2.25,2.25 0 0 1 42.75,68.25Z"
+                android:duration="480" android:startOffset="70"
+                android:repeatCount="infinite" android:repeatMode="reverse"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+        </aapt:attr>
+    </target>
+    <target android:name="bar2">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:propertyName="pathData" android:valueType="pathType"
+                android:valueFrom="M51.75,51A2.25,2.25 0 0 1 56.25,51L56.25,57A2.25,2.25 0 0 1 51.75,57Z"
+                android:valueTo="M51.75,42.75A2.25,2.25 0 0 1 56.25,42.75L56.25,65.25A2.25,2.25 0 0 1 51.75,65.25Z"
+                android:duration="540" android:startOffset="140"
+                android:repeatCount="infinite" android:repeatMode="reverse"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+        </aapt:attr>
+    </target>
+    <target android:name="bar3">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:propertyName="pathData" android:valueType="pathType"
+                android:valueFrom="M60.75,49.5A2.25,2.25 0 0 1 65.25,49.5L65.25,58.5A2.25,2.25 0 0 1 60.75,58.5Z"
+                android:valueTo="M60.75,36.75A2.25,2.25 0 0 1 65.25,36.75L65.25,71.25A2.25,2.25 0 0 1 60.75,71.25Z"
+                android:duration="420" android:startOffset="210"
+                android:repeatCount="infinite" android:repeatMode="reverse"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+        </aapt:attr>
+    </target>
+    <target android:name="bar4">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:propertyName="pathData" android:valueType="pathType"
+                android:valueFrom="M69.75,51.375A2.25,2.25 0 0 1 74.25,51.375L74.25,56.625A2.25,2.25 0 0 1 69.75,56.625Z"
+                android:valueTo="M69.75,44.25A2.25,2.25 0 0 1 74.25,44.25L74.25,63.75A2.25,2.25 0 0 1 69.75,63.75Z"
+                android:duration="480" android:startOffset="280"
+                android:repeatCount="infinite" android:repeatMode="reverse"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+        </aapt:attr>
+    </target>
+</animated-vector>

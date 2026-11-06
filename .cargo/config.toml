@@ -1,0 +1,4 @@
+# Windows installers should not require a separate VC++ runtime installation.
+# Cargo's native build helpers propagate this choice to the bundled C codec.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

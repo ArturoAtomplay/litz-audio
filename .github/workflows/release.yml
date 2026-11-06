@@ -1,0 +1,125 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+env:
+  LITZ_DATA_DIR: ${{ github.workspace }}/target/model
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    # Ubuntu 24.04 is the oldest mainstream PipeWire 1.x base, so its glibc
+    # (2.39) is the floor for the portable tarball.
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libclang-dev pkg-config cmake rpm
+      - run: packaging/fetch-model.sh target/model
+      - run: cargo build --locked --profile dist -p litzd
+      - name: Portable tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          root="target/dist/litz-$version-linux-${{ matrix.arch }}"
+          install -Dm755 target/dist/litzd "$root/bin/litzd"
+          install -Dm644 target/model/DeepFilterNet3_onnx.tar.gz "$root/share/litz/DeepFilterNet3_onnx.tar.gz"
+          install -Dm644 LICENSE THIRD_PARTY_NOTICES -t "$root/share/licenses/litz"
+          # Laid out to be copied into ~/.local as is; systemd reads user units
+          # from ~/.local/share/systemd/user.
+          mkdir -p "$root/share/systemd/user"
+          sed 's|@BINDIR@|%h/.local/bin|' packaging/linux/litzd.service.in > "$root/share/systemd/user/litzd.service"
+          tar -C target/dist -czf "target/dist/litz-$version-linux-${{ matrix.arch }}.tar.gz" "$(basename "$root")"
+      - name: Debian and RPM packages
+        run: |
+          cmake -S packaging/linux -B target/package -DLITZ_VERSION="${GITHUB_REF_NAME#v}" \
+            -DLITZ_BINARY="$PWD/target/dist/litzd" -DLITZ_MODEL="$LITZ_DATA_DIR/DeepFilterNet3_onnx.tar.gz"
+          (cd target/package && cpack -G "DEB;RPM")
+          mv target/package/*.deb target/package/*.rpm target/dist/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: target/dist/*.*
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - shell: bash
+        run: packaging/fetch-model.sh target/model
+      - run: cargo build --locked --profile dist -p litzd
+      - name: Installer
+        shell: pwsh
+        run: |
+          $version = "$env:GITHUB_REF_NAME".TrimStart('v')
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging/windows/litz.iss
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows
+          path: dist/*
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - run: pip install ninja==1.13.0
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - run: android/gradlew -p android :app:assembleFossRelease :app:bundlePlayRelease
+        env:
+          LITZ_ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID }}
+          LITZ_ADMOB_BANNER_ID: ${{ vars.ADMOB_BANNER_ID }}
+      - name: Sign APK and bundle
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE" || { echo "ANDROID_KEYSTORE_BASE64 secret is required to sign releases"; exit 1; }
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          version="${GITHUB_REF_NAME#v}"
+          outputs=android/app/build/outputs
+          mkdir -p dist play
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/release.jks" \
+            --ks-pass env:KEYSTORE_PASSWORD --out "dist/litz-$version.apk" \
+            "$outputs/apk/foss/release/app-foss-release-unsigned.apk"
+          alias="$(keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass:env KEYSTORE_PASSWORD \
+            | awk -F, '/PrivateKeyEntry/ { print $1; exit }')"
+          jarsigner -keystore "$RUNNER_TEMP/release.jks" -storepass:env KEYSTORE_PASSWORD -keypass:env KEYSTORE_PASSWORD \
+            -signedjar "play/litz-$version-play.aab" "$outputs/bundle/playRelease/app-play-release.aab" "$alias"
+          cp "$outputs/mapping/fossRelease/mapping.txt" "play/litz-$version-foss-mapping.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android
+          path: dist/*.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: play
+          path: play/*
+  publish:
+    needs: [linux, windows, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          pattern: '{linux-*,windows,android}'
+          merge-multiple: true
+      - name: Checksums and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp packaging/install.sh dist/
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          packaging/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$RUNNER_TEMP/notes.md" dist/*

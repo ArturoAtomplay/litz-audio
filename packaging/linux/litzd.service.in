@@ -1,0 +1,15 @@
+[Unit]
+Description=Litz Audio microphone
+After=pipewire.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+ExecStart=@BINDIR@/litzd
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
