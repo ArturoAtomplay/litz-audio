@@ -1,0 +1,70 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    env:
+      LITZ_DATA_DIR: ${{ github.workspace }}/target/model
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Linux development libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libclang-dev pkg-config cmake
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo fmt --all -- --check
+      - name: DeepFilterNet model
+        shell: bash
+        run: packaging/fetch-model.sh target/model
+      - run: cargo clippy --locked -p litz-core -p litzd --all-targets --all-features -- -D warnings
+      - run: cargo test --locked -p litz-core -p litzd --all-features
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DBinDir=..\..\target\debug packaging/windows/litz.iss'
+      - name: Debian package
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S packaging/linux -B target/package -DLITZ_BINARY="$PWD/target/debug/litzd" -DLITZ_MODEL="$LITZ_DATA_DIR/DeepFilterNet3_onnx.tar.gz"
+          cpack --config target/package/CPackConfig.cmake -G DEB
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: SDK packages
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - run: pip install ninja==1.13.0
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Foss build has no proprietary libraries
+        run: |
+          if grep -E '^com\.google\.(android\.(gms|ump)|firebase)' android/app/gradle.lockfile | grep -q foss; then
+            echo "The foss flavor must not depend on Google Play services, UMP or Firebase"; exit 1
+          fi
+      - name: Android build and tests
+        env:
+          LITZ_ADMOB_APP_ID: ca-app-pub-3940256099942544~3347511713
+          LITZ_ADMOB_BANNER_ID: ca-app-pub-3940256099942544/9214589741
+        run: >-
+          android/gradlew -p android checkKotlinFormat
+          :app:testFossDebugUnitTest :app:testPlayDebugUnitTest
+          :app:assembleFossDebug :app:assemblePlayDebug :app:assembleFossRelease :app:bundlePlayRelease
+          :app:lintFossDebug :app:lintPlayDebug
