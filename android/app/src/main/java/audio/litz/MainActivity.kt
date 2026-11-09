@@ -116,7 +116,6 @@ class MainActivity : ComponentActivity() {
                     start = { authorize(it) },
                     stop = vm::stop,
                     connect = { authorize(null) },
-                    disconnect = vm::disconnect,
                     pair = vm::pair,
                     cancelPair = vm::cancelPair,
                     select = vm::select,

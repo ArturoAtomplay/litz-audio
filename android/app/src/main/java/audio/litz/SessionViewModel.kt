@@ -28,6 +28,8 @@ import org.json.JSONObject
 internal fun retryDelay(seen: Boolean, failures: Int): Long =
     if (seen) 2_000L shl failures.coerceIn(0, 3) else 60_000L
 
+private const val IDLE_CLOSE_MS = 30_000L
+
 sealed interface SessionLifecycle {
     data object Idle : SessionLifecycle
 
@@ -56,7 +58,6 @@ internal data class UiState(
     val pairingCode: String? = null,
     val discovering: Boolean = false,
     val quiet: Boolean = false,
-    val disconnected: Boolean = false,
 ) {
     val lifecycle: SessionLifecycle
         get() {
@@ -135,11 +136,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 reconnectIfIdle()
             }
         }
-    private var disconnected = false
-        set(value) {
-            field = value
-            mutable.update { it.copy(disconnected = value) }
-        }
+    private var forgetting = false
+    private var idleClose: Job? = null
 
     private var lastAttempt = SystemClock.elapsedRealtime()
     private var visible = false
@@ -149,7 +147,16 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun visible(value: Boolean) {
         visible = value
+        idleClose?.cancel()
         if (value) reconnectIfIdle()
+        else
+            idleClose =
+                viewModelScope.launch {
+                    delay(IDLE_CLOSE_MS)
+                    val ui = mutable.value
+                    if (!ui.settings.mic && !ui.settings.playback && ui.pairing == null)
+                        service?.disconnectAndWait()
+                }
     }
 
     private fun seen(ui: UiState) =
@@ -159,7 +166,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         val ui = mutable.value
         if (
             visible &&
-                !disconnected &&
+                !forgetting &&
                 Snapshot(ui.session).reconnectAllowed &&
                 ui.selected != null &&
                 ui.pairing == null &&
@@ -384,7 +391,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun pair(computer: NearbyComputer) {
         if (pairJob != null) return
-        disconnected = false
         mutable.update { it.copy(pairing = computer.name, message = null, quiet = false) }
         pairJob =
             viewModelScope.launch {
@@ -478,7 +484,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun forget() {
         val pin = mutable.value.selected ?: return
-        disconnected = true
+        forgetting = true
         viewModelScope.launch {
             try {
                 service?.forgetAndWait()
@@ -499,12 +505,13 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 }
             } catch (e: Exception) {
                 message(e.message ?: "Could not forget computer")
+            } finally {
+                forgetting = false
             }
         }
     }
 
     internal fun select(computer: SavedComputer) {
-        disconnected = false
         mutable.update { it.copy(quiet = false) }
         viewModelScope.launch {
             try {
@@ -570,14 +577,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun connect() {
         lastAttempt = SystemClock.elapsedRealtime()
-        disconnected = false
         mutable.update { it.copy(quiet = false) }
         service?.connect() ?: message("Service is starting; try Connect again")
-    }
-
-    internal fun disconnect() {
-        disconnected = true
-        service?.disconnect()
     }
 
     internal fun route(revision: Long, route: Any) {
@@ -597,7 +598,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             message("Connect to pair first")
             return
         }
-        disconnected = false
         mutable.update { it.copy(quiet = false) }
         edit(settings)
         draft = null

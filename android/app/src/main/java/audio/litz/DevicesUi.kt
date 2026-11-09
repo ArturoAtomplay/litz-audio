@@ -74,7 +74,6 @@ internal fun DevicesApp(
     start: (Settings) -> Unit,
     stop: () -> Unit,
     connect: () -> Unit,
-    disconnect: () -> Unit,
     pair: (NearbyComputer) -> Unit,
     cancelPair: () -> Unit,
     select: (SavedComputer) -> Unit,
@@ -156,7 +155,6 @@ internal fun DevicesApp(
                                 status,
                                 busy,
                                 connect = connect,
-                                disconnect = disconnect,
                                 change = { screen = Screen.Computers },
                                 forget = forget,
                                 pairAgain = pair,
@@ -208,14 +206,14 @@ private fun ComputerCard(
     status: Snapshot,
     busy: Boolean,
     connect: () -> Unit,
-    disconnect: () -> Unit,
     change: () -> Unit,
     forget: () -> Unit,
     pairAgain: (NearbyComputer) -> Unit,
 ) {
     val nearby = ui.nearby.firstOrNull { it.fingerprint == computer.fingerprint }
     val connecting =
-        status.state == "Reconnecting" || (ui.session.pending && !ui.quiet && !status.connected)
+        status.state == "Reconnecting" ||
+            (ui.session.pending && !status.connected && (!ui.quiet || nearby != null))
     val (line, color) =
         when {
             !status.reconnectAllowed && !status.connected ->
@@ -223,7 +221,6 @@ private fun ComputerCard(
             status.inUse -> "In use by ${status.owner}" to MaterialTheme.colorScheme.tertiary
             status.connected -> "Connected" to MaterialTheme.colorScheme.primary
             connecting -> "Connecting…" to MaterialTheme.colorScheme.tertiary
-            ui.disconnected -> "Disconnected" to MaterialTheme.colorScheme.outline
             nearby != null && ui.session.error != null ->
                 "Found on your network, but not answering" to MaterialTheme.colorScheme.outline
             else -> "Offline" to MaterialTheme.colorScheme.outline
@@ -248,14 +245,6 @@ private fun ComputerCard(
                         Icon(painterResource(R.drawable.ic_more), contentDescription = "More")
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(if (status.connected) "Disconnect" else "Connect") },
-                            enabled = !busy,
-                            onClick = {
-                                menu = false
-                                if (status.connected) disconnect() else connect()
-                            },
-                        )
                         DropdownMenuItem(
                             text = { Text("Change computer") },
                             enabled = !busy,
@@ -292,7 +281,6 @@ private fun ComputerCard(
                 Text(
                     when {
                         !status.reconnectAllowed -> "Pair again to use it with this phone."
-                        ui.disconnected -> "Connect when you want to use audio."
                         nearby != null ->
                             "Make sure your computer's firewall allows Litz on UDP port 47165."
                         else -> "Litz connects on its own when ${computer.name} is on."
@@ -308,10 +296,7 @@ private fun ComputerCard(
                                 Text("Pair again")
                             }
                         }
-                    else
-                        Button(onClick = connect, enabled = !busy) {
-                            Text(if (ui.disconnected) "Connect" else "Try again")
-                        }
+                    else Button(onClick = connect, enabled = !busy) { Text("Try again") }
                 }
             }
         }

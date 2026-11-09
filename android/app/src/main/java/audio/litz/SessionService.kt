@@ -433,10 +433,6 @@ class SessionService : Service() {
         disconnectAndWait()
     }
 
-    internal fun disconnect() {
-        scope.launch { disconnectAndWait() }
-    }
-
     internal suspend fun disconnectAndWait() {
         stopGeneration++
         synchronized(lifetime) { if (handle != 0L) Native.cancel(handle) }
