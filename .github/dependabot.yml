@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # deep_filter's DFN3 graph is built against these exact releases.
+      - dependency-name: "tract-*"
+      - dependency-name: ndarray
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo:
         patterns: ["*"]
