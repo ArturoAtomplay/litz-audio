@@ -11,7 +11,7 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 pipewire = { version = "=0.10.1", features = ["v1_0_0"] }
-rtrb = "=0.4.0"
+rtrb = "=0.4.1"
 quinn = { version = "=0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring"] }
 tokio = { version = "=1.54.1", features = ["rt", "macros", "time", "io-util", "sync", "signal", "net"] }

@@ -21,22 +21,22 @@ rtrb.workspace = true
 nnnoiseless = { version = "=0.5.2", default-features = false }
 # Nothing imports tract directly. These pins hold deep_filter's tract at the
 # 0.21.4 release its DFN3 graph was built and tested against.
-tract-core = "=0.21.4"
-tract-onnx = "=0.21.4"
-tract-pulse = "=0.21.4"
-tract-hir = "=0.21.4"
-ndarray = "=0.15.6"
+tract-core = "=0.23.10"
+tract-onnx = "=0.23.10"
+tract-pulse = "=0.23.10"
+tract-hir = "=0.23.10"
+ndarray = "=0.17.2"
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2d8309e0935d165700c91da9de862a99c31", default-features = false, features = ["tract"] }
-mdns-sd = "=0.21.6"
+mdns-sd = "=0.21.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire.workspace = true
-libc = "=0.2.186"
-zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+libc = "=0.2.191"
+zbus = { version = "=6.2.1", default-features = false, features = ["tokio"] }
 futures-lite = { version = "=2.6.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 wasapi = "=0.26.0"
 windows-sys = { version = "=0.61.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }
-windows-core = "=0.62.2"
+windows-core = "=0.100.0"
 windows = { version = "=0.62.2", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Registry", "Win32_UI_Notifications", "Win32_UI_Shell"] }
