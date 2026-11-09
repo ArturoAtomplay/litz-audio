@@ -452,9 +452,7 @@ impl Worker {
                         pipeline.process(&mut job.samples)?;
                         Ok((job.samples, pipeline.level))
                     })();
-                    if job.reply.send(result).is_err() {
-                        break;
-                    }
+                    let _ = job.reply.send(result);
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -489,8 +487,8 @@ impl Worker {
         self.transition = false;
         if let Some(restarting) = self.restarting.take() {
             restarting.abort();
+            self.back_off();
         }
-        self.retry_at = Instant::now();
         self.generation = self
             .generation
             .checked_add(1)
@@ -523,10 +521,12 @@ impl Worker {
                     next.history = self.history.clone();
                     *self = next;
                 } else {
-                    self.retry_attempt = (self.retry_attempt + 1).min(4);
-                    self.retry_at =
-                        Instant::now() + Duration::from_secs(2u64 << self.retry_attempt);
+                    self.back_off();
                 }
+            }
+            if self.restarting.is_none() && Instant::now() >= self.retry_at && self.alive() {
+                self.disabled = false;
+                self.generation = self.generation.wrapping_add(1);
             }
             if self.disabled {
                 self.remember(samples);
@@ -548,16 +548,27 @@ impl Worker {
             *samples = dry;
             self.disabled = true;
             self.transition = true;
-            self.retry_at = Instant::now() + Duration::from_secs(2);
-            self.tx.take();
-            if let Some(thread) = self.thread.take() {
-                tokio::task::spawn_blocking(move || {
-                    let _ = thread.join();
-                });
+            self.back_off();
+            if !self.alive() {
+                self.tx.take();
+                if let Some(thread) = self.thread.take() {
+                    tokio::task::spawn_blocking(move || {
+                        let _ = thread.join();
+                    });
+                }
             }
+        } else if self.retry_attempt > 0 && self.retry_at.elapsed() > Duration::from_secs(30) {
+            self.retry_attempt = 0;
         }
         self.finish(samples);
         Ok(())
+    }
+    fn alive(&self) -> bool {
+        self.tx.is_some() && self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+    fn back_off(&mut self) {
+        self.retry_at = Instant::now() + Duration::from_secs(2u64 << self.retry_attempt);
+        self.retry_attempt = (self.retry_attempt + 1).min(4);
     }
     fn remember(&mut self, samples: &[f32; FRAME]) {
         if self.history.len() == 20 {
@@ -949,6 +960,59 @@ mod tests {
         let mut silence = [0.0; FRAME];
         next.process(&mut silence).await.unwrap();
         assert_eq!(silence, [0.0; FRAME]);
+    }
+    #[tokio::test]
+    async fn missed_deadline_resumes_the_loaded_effect_on_its_thread() {
+        let mut worker = Worker::try_new(VoiceSettings {
+            auto_level: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let thread = worker.thread.as_ref().unwrap().thread().id();
+        let (reply, response) = tokio::sync::oneshot::channel();
+        drop(response);
+        worker
+            .tx
+            .as_ref()
+            .unwrap()
+            .send(Job {
+                settings: worker.settings,
+                generation: worker.generation,
+                at: Instant::now(),
+                samples: [0.1; FRAME],
+                reply,
+            })
+            .unwrap();
+        worker.disabled = true;
+        for _ in 0..100 {
+            worker.retry_at = Instant::now();
+            worker.process(&mut [0.1; FRAME]).await.unwrap();
+            assert!(worker.restarting.is_none());
+            if !worker.disabled {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!worker.disabled);
+        assert_eq!(worker.thread.as_ref().unwrap().thread().id(), thread);
+    }
+    #[tokio::test]
+    async fn stream_resets_do_not_cut_the_retry_backoff_short() {
+        let mut worker = Worker::try_new(VoiceSettings {
+            auto_level: true,
+            ..Default::default()
+        })
+        .unwrap();
+        worker.disabled = true;
+        worker.back_off();
+        for _ in 0..10 {
+            worker.reset().unwrap();
+            let mut frame = [0.1; FRAME];
+            worker.process(&mut frame).await.unwrap();
+            assert!(worker.disabled);
+            assert!(worker.restarting.is_none());
+            assert_eq!(frame, [0.1; FRAME]);
+        }
     }
     #[tokio::test]
     async fn overloaded_effect_recovers_without_settings_change() {
