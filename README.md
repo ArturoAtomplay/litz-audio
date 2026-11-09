@@ -4,6 +4,17 @@ Low-latency audio over LAN between a PC and an Android phone.
 
 Use your phone as a microphone on Linux or Windows, and listen to your computer's audio on the phone. The computer runs a small background service, `litzd`; the Android app connects to it over your local network.
 
+<table align="center">
+  <tr>
+    <th>Home</th>
+    <th>Settings</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/home.png" width="300" alt="Home screen with the microphone and Listen turned on"></td>
+    <td><img src="docs/screenshots/settings.png" width="300" alt="Settings with RNNoise noise suppression and voice processing"></td>
+  </tr>
+</table>
+
 Litz is early software. Expect rough edges, especially on Windows.
 
 [![Support Litz on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/arturoatomplay)
