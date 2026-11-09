@@ -73,7 +73,7 @@ mod notification {
     use super::{APPROVAL_WINDOW, Request};
     use futures_lite::StreamExt;
     use std::collections::HashMap;
-    use zbus::zvariant::Value;
+    use zbus::Variant;
 
     /// Notification servers may render markup in the body.
     fn escape(text: &str) -> String {
@@ -101,7 +101,7 @@ mod notification {
         // NotificationClosed, and separate streams could see the close first.
         let mut signals = proxy.receive_all_signals().await?;
         // Critical urgency keeps the notification on screen until answered.
-        let hints = HashMap::from([("urgency", Value::U8(2))]);
+        let hints = HashMap::from([("urgency", Variant::U8(2))]);
         let id: u32 = proxy
             .call(
                 "Notify",

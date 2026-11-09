@@ -19,8 +19,8 @@ rcgen.workspace = true
 getrandom.workspace = true
 rtrb.workspace = true
 nnnoiseless = { version = "=0.5.2", default-features = false }
-# Nothing imports tract directly. These pins hold deep_filter's tract at the
-# 0.21.4 release its DFN3 graph was built and tested against.
+# Nothing imports tract directly. deep_filter breaks with any tract after
+# 0.21.4, including 0.21.x patch releases.
 tract-core = "=0.21.4"
 tract-onnx = "=0.21.4"
 tract-pulse = "=0.21.4"
@@ -32,7 +32,7 @@ mdns-sd = "=0.21.7"
 [target.'cfg(target_os = "linux")'.dependencies]
 pipewire.workspace = true
 libc = "=0.2.191"
-zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
+zbus = { version = "=6.2.1", default-features = false, features = ["tokio", "proxy"] }
 futures-lite = { version = "=2.6.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
