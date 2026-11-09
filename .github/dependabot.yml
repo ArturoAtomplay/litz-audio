@@ -5,11 +5,13 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # deep_filter's DFN3 graph is built against these exact releases.
+      # deep_filter needs tract =0.21.4 (later 0.21.x break its API) and
+      # ndarray 0.15.
       - dependency-name: "tract-*"
       - dependency-name: ndarray
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
+      # #[implement] needs the windows-core that the windows crate uses, so
+      # it moves only together with windows.
+      - dependency-name: windows-core
     groups:
       cargo:
         patterns: ["*"]
