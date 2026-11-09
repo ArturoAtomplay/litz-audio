@@ -222,7 +222,7 @@ pub fn open(
     let mut props = properties! {
         "node.name" => "litz.capture", "media.type" => "Audio", "media.category" => "Capture",
         "media.role" => "Music", "audio.channels" => "2", "audio.position" => "[ FL FR ]",
-        "node.latency" => "256/48000", "node.dont-reconnect" => "true",
+        "node.latency" => "512/48000", "node.dont-reconnect" => "true",
         "node.dont-fallback" => "true", "node.pause-on-idle" => "true",
     };
     if let Some((_, name)) = &target {

@@ -183,7 +183,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             "node.virtual" => "true",
             "audio.channels" => "1",
             "audio.position" => "[ MONO ]",
-            "node.latency" => "256/48000",
+            "node.latency" => "512/48000",
             "node.always-process" => "false",
             "node.pause-on-idle" => "true",
         },
