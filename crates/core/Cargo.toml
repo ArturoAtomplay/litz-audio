@@ -15,11 +15,11 @@ serde_json.workspace = true
 bytes.workspace = true
 opus.workspace = true
 rubato.workspace = true
-audioadapter-buffers = "=5.1.0"
+audioadapter-buffers = "=5.2.0"
 sha2.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-libc = "=0.2.186"
+libc = "=0.2.191"
 
 [dev-dependencies]
 rcgen.workspace = true

@@ -18,4 +18,4 @@ rcgen.workspace = true
 getrandom.workspace = true
 rtrb.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-libc = "=0.2.186"
+libc = "=0.2.191"
