@@ -1,5 +1,7 @@
 package audio.litz
 
+import android.os.Build
+import java.util.Locale
 import org.json.JSONObject
 
 internal class Snapshot(status: SessionStatus) {
@@ -27,27 +29,6 @@ internal class Snapshot(status: SessionStatus) {
 
     fun metric(key: String) =
         if (json.isNull(key)) "unavailable" else json.opt(key)?.toString() ?: "unavailable"
-
-    fun direction(index: Int, status: SessionStatus): String {
-        val requested = if (index == 0) status.settings.mic else status.settings.playback
-        if (status.pending && status.audioPending && requested != running(index))
-            return if (requested) "Starting…" else "Stopping…"
-        if (state == "Reconnecting" && requested) return "Reconnecting…"
-        if (error(index) != null) return "Error"
-        if (running(index)) return "Running"
-        if (index == 0 && requested && applied?.optBoolean("muted") == true && connected)
-            return "Muted"
-        if (requested && status.error != null) return "Error"
-        return "Off"
-    }
-
-    val connection: String
-        get() =
-            when {
-                state == "Reconnecting" -> "Reconnecting"
-                connected -> "Connected"
-                else -> "Disconnected"
-            }
 }
 
 internal fun routeDescription(route: Any?, inventory: JSONObject): String {
@@ -74,65 +55,108 @@ internal fun routeDescription(route: Any?, inventory: JSONObject): String {
     return "Endpoint disappeared · choose another source"
 }
 
-internal fun diagnosticReport(ui: UiState, status: Snapshot): String = buildString {
-    appendLine("State: ${ui.lifecycle}")
-    appendLine(
-        "Connection: ${if (ui.session.error != null && !status.connected) "Error" else status.connection}"
-    )
-    appendLine("Profile: ${status.metric("profile")}")
-    appendLine("Stream rate (Hz): ${status.metric("stream_rate")}")
-    appendLine("Packet duration (ms): ${status.metric("frame_ms")}")
-    appendLine("Microphone channels: ${status.metric("microphone_channels")}")
-    appendLine("Listen channels: ${status.metric("playback_channels")}")
-    listOf(
-            "RTT (ms)" to "rtt_ms",
-            "Jitter buffer (ms)" to "jitter_ms",
-            "Late packets" to "late_packets",
-            "PLC frames" to "concealed_frames",
-            "Underruns" to "underruns",
-            "Transport drops" to "transport_drops",
-        )
-        .forEach { (label, key) -> appendLine("$label: ${status.metric(key)}") }
-    appendLine("Microphone: ${status.direction(0, ui.session)}")
-    appendLine("Listen: ${status.direction(1, ui.session)}")
+internal data class DiagnosticSection(val title: String, val rows: List<Pair<String, String>>)
+
+internal fun diagnostics(ui: UiState, status: Snapshot): List<DiagnosticSection> {
+    fun number(key: String, digits: Int = 0): String =
+        status.metric(key).toDoubleOrNull()?.let { "%.${digits}f".format(Locale.ROOT, it) } ?: "?"
     val audio = status.audio
-    listOf(
-            "Input rate (Hz)" to "input_rate",
-            "Output rate (Hz)" to "output_rate",
-            "Input buffer (frames)" to "input_buffer",
-            "Output buffer (frames)" to "output_buffer",
+    fun stream(side: String): List<Pair<String, String>> {
+        if (audio == null || audio.optInt("${side}_rate") <= 0) return emptyList()
+        val xruns = audio.optInt("${side}_xruns", -1)
+        return listOfNotNull(
+            "Sample rate" to "${audio.optInt("${side}_rate")} Hz",
+            "Latency mode" to if (audio.optInt("${side}_low_latency") == 1) "Low" else "Normal",
+            "Sharing" to if (audio.optInt("${side}_exclusive") == 1) "Exclusive" else "Shared",
+            ((if (side == "input") "Overruns" else "Underruns") to "$xruns").takeIf { xruns >= 0 },
         )
-        .forEach { (label, key) ->
-            appendLine(
-                "$label: ${if (audio == null || audio.isNull(key) || audio.optInt(key) == 0) "unavailable" else audio.opt(key)}"
+    }
+    return buildList {
+        add(
+            DiagnosticSection(
+                "App",
+                listOf(
+                    "Version" to "${BuildConfig.VERSION_NAME} (${BuildConfig.FLAVOR})",
+                    "Android" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                    "Phone" to "${Build.MANUFACTURER} ${Build.MODEL}",
+                ),
             )
-        }
-    appendLine(
-        "Microphone route error: ${if (status.error(0) == null) "none reported" else "present (details in app)"}"
-    )
-    appendLine(
-        "Playback route error: ${if (status.error(1) == null) "none reported" else "present (details in app)"}"
-    )
-    appendLine("Windows microphone requires VB-CABLE on the computer")
-    appendLine(
-        "Voice effects: ${status.routes?.optString("voice_runtime", "unavailable") ?: "unavailable"}"
-    )
-    appendLine("Capture source ID: ${audio?.optInt("source")?.takeIf { it != 0 } ?: "unavailable"}")
+        )
+        add(
+            DiagnosticSection(
+                "Connection",
+                listOfNotNull(
+                    "Status" to
+                        when {
+                            status.inUse -> "In use by another phone"
+                            status.connected -> "Connected"
+                            status.state == "Reconnecting" -> "Reconnecting"
+                            else -> "Offline"
+                        },
+                    ("Round trip" to "${number("rtt_ms", 1)} ms").takeIf { status.connected },
+                ),
+            )
+        )
+        if (!status.connected) return@buildList
+        add(
+            DiagnosticSection(
+                "Microphone",
+                if (!status.running(0)) listOf("Status" to "Off")
+                else
+                    listOfNotNull(
+                        "Status" to if (ui.settings.muted) "Muted" else "On",
+                        "Recording mode" to recordingModeDescription(ui.settings.source, status),
+                        status.routes
+                            ?.optString("voice_runtime")
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { "Voice processing" to it.replaceFirstChar(Char::uppercase) },
+                        "Dropped packets" to number("transport_drops"),
+                    ) + stream("input"),
+            )
+        )
+        add(
+            DiagnosticSection(
+                "Listen",
+                if (!status.running(1)) listOf("Status" to "Off")
+                else
+                    listOf(
+                        "Status" to "On",
+                        "Jitter buffer" to "${number("jitter_ms")} ms",
+                        "Late packets" to number("late_packets"),
+                        "Concealed packets" to number("concealed_frames"),
+                    ) +
+                        stream("output") +
+                        listOfNotNull(
+                            audio?.let { "Buffer" to "${it.optInt("output_buffer")} frames" },
+                            "Callback" to "${number("callback_frames")} frames",
+                        ),
+            )
+        )
+        listOfNotNull(
+                ("Microphone" to "Error").takeIf { status.error(0) != null },
+                ("Listen" to "Error").takeIf { status.error(1) != null },
+            )
+            .takeIf { it.isNotEmpty() }
+            ?.let { add(DiagnosticSection("Errors", it)) }
+    }
 }
 
-internal fun recordingModeDescription(status: Snapshot): String {
-    if (!status.running(0)) return "How Android captures your voice"
-    val source = status.audio?.optInt("source") ?: return "Active mode unavailable"
-    val title =
-        microphoneSources.firstOrNull { it.value == source }?.title ?: "Unknown mode ($source)"
-    return "Active: $title · Android may add device processing"
+internal fun diagnosticText(sections: List<DiagnosticSection>): String =
+    sections.joinToString("\n") { section ->
+        section.title + section.rows.joinToString("") { (label, value) -> "\n  $label: $value" }
+    }
+
+internal fun recordingModeDescription(selected: Int, status: Snapshot): String {
+    fun title(value: Int) =
+        microphoneSources.firstOrNull { it.value == value }?.title ?: "Unknown ($value)"
+    val active = status.audio?.optInt("source")?.takeIf { status.running(0) && it != 0 }
+    return if (active == null || active == selected) title(selected)
+    else "${title(selected)} · using ${title(active)}"
 }
 
 internal fun voiceRuntimeDescription(status: Snapshot): String? {
     if (!status.running(0)) return null
     return when (status.routes?.optString("voice_runtime")) {
-        "active" -> "Voice effects active"
-        "off" -> "Voice effects off"
         "bypassed" ->
             "Voice effects temporarily unavailable. Audio continues; retrying automatically."
         "recovering" -> "Restoring voice effects. Audio continues without effects."

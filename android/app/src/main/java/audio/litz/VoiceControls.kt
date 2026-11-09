@@ -1,14 +1,11 @@
 package audio.litz
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.Immutable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -133,111 +130,51 @@ internal fun VoiceControls(
             latestApply(latestRevision, draft.json())
         }
     }
+    val algorithms =
+        listOf(
+                Triple("none", "Off", null),
+                Triple(
+                    "rnnoise",
+                    "RNNoise",
+                    "Light: removes steady background noise with little effect on your voice",
+                ),
+                Triple(
+                    "deep_filter_net",
+                    "DeepFilterNet",
+                    "Strong: removes more noise, but heavy noise may change how you sound",
+                ),
+            )
+            .filter { it.first in supported }
+    var suppressionSheet by remember { mutableStateOf(false) }
+    var sensitivitySheet by remember { mutableStateOf(false) }
     OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Voice processing", style = MaterialTheme.typography.titleLarge)
-            Text(
-                if (enabled) "Fine-tune your microphone sound on the computer."
-                else "Voice controls are temporarily unavailable.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            var expanded by remember { mutableStateOf(false) }
-            val algorithms =
-                listOf(
-                        "none" to "None",
-                        "rnnoise" to "RNNoise",
-                        "deep_filter_net" to "DeepFilterNet",
-                    )
-                    .filter { it.first in supported }
-            OutlinedCard(
-                onClick = { expanded = true },
+        Column(Modifier.padding(vertical = 6.dp)) {
+            SettingRow(
+                "Noise suppression",
+                algorithms.firstOrNull { it.first == draft.suppression }?.second ?: "Unavailable",
                 enabled = enabled,
-                modifier =
-                    Modifier.fillMaxWidth().semantics { contentDescription = "Noise suppression" },
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                SettingValue(
-                    "Noise suppression",
-                    algorithms.firstOrNull { it.first == draft.suppression }?.second
-                        ?: "Unavailable",
-                    enabled = enabled,
-                )
-            }
-            if (expanded) {
-                AudioChoiceSheet("Noise suppression", dismiss = { expanded = false }) {
-                    algorithms.forEach { (value, label) ->
-                        AudioChoiceRow(
-                            label,
-                            selected = draft.suppression == value,
-                            enabled = enabled,
-                            description =
-                                when (value) {
-                                    "deep_filter_net" ->
-                                        "Stronger reduction, but difficult noise may alter your voice."
-                                    else -> null
-                                },
-                        ) {
-                            expanded = false
-                            send(draft.copy(suppression = value))
-                        }
-                    }
-                }
-            }
-
-            Text(
-                "Use when speaker audio leaks into the phone microphone. May reduce sustained speech; leave off when echo is not a problem.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { suppressionSheet = true },
             )
-            VoiceToggle("Automatic level", draft.level, enabled) { send(draft.copy(level = it)) }
-            inputRms?.let { rms ->
-                val db = (20.0 * log10(rms.coerceAtLeast(0.000001))).coerceIn(-60.0, 0.0)
-                Text("Input level: ${db.roundToInt()} dBFS")
-                LinearProgressIndicator(
-                    progress = { ((db + 60.0) / 60.0).toFloat() },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            var sensitivityExpanded by remember { mutableStateOf(false) }
-            OutlinedCard(
-                onClick = { sensitivityExpanded = true },
+            SettingRow(
+                "Automatic level",
+                "Keeps your voice at a steady volume",
                 enabled = enabled,
-                modifier =
-                    Modifier.fillMaxWidth().semantics { contentDescription = "Input sensitivity" },
-                shape = RoundedCornerShape(16.dp),
+                onClick = { send(draft.copy(level = !draft.level)) },
             ) {
-                SettingValue(
-                    "Input sensitivity",
-                    when (draft.sensitivity) {
-                        "automatic" -> "Automatic"
-                        "manual" -> "Manual"
-                        else -> "Off"
-                    },
-                    enabled = enabled,
-                )
+                Switch(checked = draft.level, onCheckedChange = null, enabled = enabled)
             }
-            if (sensitivityExpanded) {
-                AudioChoiceSheet("Input sensitivity", dismiss = { sensitivityExpanded = false }) {
-                    listOf("off" to "Off", "automatic" to "Automatic", "manual" to "Manual")
-                        .forEach { (value, label) ->
-                            AudioChoiceRow(
-                                label,
-                                selected = draft.sensitivity == value,
-                                enabled = enabled,
-                            ) {
-                                sensitivityExpanded = false
-                                send(draft.copy(sensitivity = value))
-                            }
-                        }
-                }
-            }
-            if (draft.sensitivity == "manual") {
-                Column {
-                    Row(Modifier.fillMaxWidth()) {
-                        Text("Voice threshold", Modifier.weight(1f))
-                        Text("${draft.threshold} dBFS")
-                    }
+            SettingRow(
+                "Input sensitivity",
+                when (draft.sensitivity) {
+                    "automatic" -> "Automatic"
+                    "manual" -> "Manual · ${draft.threshold} dBFS"
+                    else -> "Off"
+                },
+                enabled = enabled,
+                onClick = { sensitivitySheet = true },
+            )
+            if (draft.sensitivity == "manual")
+                Column(Modifier.padding(horizontal = 20.dp)) {
                     Slider(
                         value = draft.threshold.toFloat(),
                         onValueChange = { value ->
@@ -252,30 +189,56 @@ internal fun VoiceControls(
                         valueRange = -60f..-20f,
                         steps = 39,
                         enabled = enabled,
+                        colors = quietSliderColors(),
                         modifier = Modifier.semantics { contentDescription = "Voice threshold" },
                     )
                     Text(
-                        "Lower values pick up quieter speech; higher values block more background sound.",
+                        "Lower picks up quieter speech. Higher blocks more background sound.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            inputRms?.let { rms ->
+                val db = (20.0 * log10(rms.coerceAtLeast(0.000001))).coerceIn(-60.0, 0.0)
+                Column(
+                    Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row {
+                        Text(
+                            "Input level",
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            "${db.roundToInt()} dBFS",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { ((db + 60.0) / 60.0).toFloat() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
-            HorizontalDivider()
-            Text("Equalizer", style = MaterialTheme.typography.titleMedium)
+            HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+            Text(
+                "Equalizer",
+                Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodyLarge,
+            )
             listOf("Low", "Mid", "High").forEachIndexed { index, label ->
-                Column {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
+                Column(Modifier.padding(horizontal = 20.dp)) {
+                    Row(Modifier.fillMaxWidth()) {
                         Text(
                             label,
                             Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "${draft.eq[index]} dB",
+                            "${if (draft.eq[index] > 0) "+" else ""}${draft.eq[index]} dB",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -300,35 +263,44 @@ internal fun VoiceControls(
                         valueRange = -12f..12f,
                         steps = 23,
                         enabled = enabled,
+                        colors = quietSliderColors(),
                         modifier = Modifier.semantics { contentDescription = label },
                     )
                 }
             }
         }
     }
-}
-
-@Composable
-private fun VoiceToggle(
-    title: String,
-    checked: Boolean,
-    enabled: Boolean,
-    change: (Boolean) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .toggleable(
-                value = checked,
-                enabled = enabled,
-                role = Role.Switch,
-                onValueChange = change,
-            )
-            .semantics { contentDescription = title },
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
-    }
+    if (suppressionSheet)
+        AudioChoiceSheet("Noise suppression", dismiss = { suppressionSheet = false }) {
+            algorithms.forEach { (value, label, description) ->
+                AudioChoiceRow(
+                    label,
+                    selected = draft.suppression == value,
+                    enabled = enabled,
+                    description = description,
+                ) {
+                    suppressionSheet = false
+                    send(draft.copy(suppression = value))
+                }
+            }
+        }
+    if (sensitivitySheet)
+        AudioChoiceSheet("Input sensitivity", dismiss = { sensitivitySheet = false }) {
+            listOf(
+                    Triple("off", "Off", "Always send your microphone"),
+                    Triple("automatic", "Automatic", "Mutes background sound between words"),
+                    Triple("manual", "Manual", "Choose the level that counts as speech"),
+                )
+                .forEach { (value, label, description) ->
+                    AudioChoiceRow(
+                        label,
+                        selected = draft.sensitivity == value,
+                        enabled = enabled,
+                        description = description,
+                    ) {
+                        sensitivitySheet = false
+                        send(draft.copy(sensitivity = value))
+                    }
+                }
+        }
 }

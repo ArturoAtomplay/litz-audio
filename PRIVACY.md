@@ -24,7 +24,7 @@ In the Google Play version, the Google Mobile Ads SDK may collect and share with
 
 Google uses this data to serve, measure and personalize ads, and to prevent fraud, under [Google's Privacy Policy](https://policies.google.com/privacy) and its rules on [how Google uses information from apps that use its services](https://policies.google.com/technologies/partner-sites). The ads SDK never has access to your audio.
 
-If you are in the European Economic Area, the United Kingdom, Switzerland or another region where consent is required, the app asks for your consent before personalized ads are shown. You can change your choice at any time in **Settings → Ad privacy choices**. You can also reset or delete your advertising ID in Android's settings, under **Privacy → Ads**.
+If you are in the European Economic Area, the United Kingdom, Switzerland or another region where consent is required, the app asks for your consent before personalized ads are shown. You can change your choice at any time in **Settings → About → Ad privacy choices**. You can also reset or delete your advertising ID in Android's settings, under **Privacy → Ads**.
 
 ## Permissions
 

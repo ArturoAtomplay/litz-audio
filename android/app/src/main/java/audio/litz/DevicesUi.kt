@@ -1,7 +1,9 @@
 package audio.litz
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -12,10 +14,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import org.json.JSONObject
 
@@ -54,7 +59,14 @@ internal fun manualEndpoint(input: String): String? {
     return "${octets.joinToString(".") { it.toInt().toString() }}:$port"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class Screen {
+    Home,
+    Computers,
+    Settings,
+}
+
+private const val SOURCE_URL = "https://github.com/ArturoAtomplay/litz-audio"
+
 @Composable
 internal fun DevicesApp(
     ui: UiState,
@@ -74,17 +86,20 @@ internal fun DevicesApp(
     refreshRoutes: () -> Unit = {},
     voice: (Long, org.json.JSONObject) -> Unit = { _, _ -> },
 ) {
-    var settings by rememberSaveable { mutableStateOf(false) }
-    var candidate by remember { mutableStateOf<NearbyComputer?>(null) }
-    var manualAddress by remember { mutableStateOf("") }
-    var manualName by remember { mutableStateOf("") }
-    var manualDialog by remember { mutableStateOf(false) }
-    val homeScroll = rememberScrollState()
-    val settingsScroll = rememberScrollState()
-    BackHandler(enabled = settings) { settings = false }
+    var screen by rememberSaveable { mutableStateOf(Screen.Home) }
+    BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
+    var lastSelected by remember { mutableStateOf(ui.selected) }
+    LaunchedEffect(ui.selected) {
+        if (ui.selected != lastSelected) {
+            lastSelected = ui.selected
+            if (ui.selected != null) screen = Screen.Home
+        }
+    }
     val status = remember(ui.session) { Snapshot(ui.session) }
     val busy = ui.session.audioPending || ui.pairing != null || permissionPending
     val selected = ui.saved.firstOrNull { it.fingerprint == ui.selected }
+    val error = ui.session.error?.takeUnless { ui.quiet && !status.connected }
+    val scrolls = Screen.entries.associateWith { rememberScrollState() }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -97,13 +112,17 @@ internal fun DevicesApp(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        if (settings) "Audio settings" else "Litz",
+                        when (screen) {
+                            Screen.Home -> "Litz"
+                            Screen.Computers -> "Computers"
+                            Screen.Settings -> "Settings"
+                        },
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.headlineSmall,
                     )
-                    TextButton(onClick = { settings = !settings }) {
-                        Text(if (settings) "Done" else "Settings")
-                    }
+                    if (screen == Screen.Home)
+                        TextButton(onClick = { screen = Screen.Settings }) { Text("Settings") }
+                    else TextButton(onClick = { screen = Screen.Home }) { Text("Done") }
                 }
             }
         },
@@ -114,405 +133,68 @@ internal fun DevicesApp(
                 Modifier.widthIn(max = 600.dp)
                     .fillMaxWidth()
                     .fillMaxHeight()
-                    .verticalScroll(if (settings) settingsScroll else homeScroll)
+                    .verticalScroll(scrolls.getValue(screen))
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                ui.message?.takeUnless { it == ui.session.error }?.let { DeviceNotice(it) }
-                ui.session.error?.let { DeviceNotice(it, error = true) }
-                if (settings) {
-                    var sources by remember { mutableStateOf(false) }
-                    Text("Phone microphone", style = MaterialTheme.typography.titleLarge)
-                    OutlinedCard(
-                        onClick = { sources = true },
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(24.dp),
-                    ) {
-                        SettingValue(
-                            "Recording mode",
-                            microphoneSources.firstOrNull { it.value == ui.settings.source }?.title
-                                ?: "Automatic",
-                            recordingModeDescription(status),
-                            enabled = !busy,
-                        )
-                    }
-                    if (sources)
-                        AudioChoiceSheet("Recording mode", dismiss = { sources = false }) {
-                            microphoneSources.forEach { source ->
-                                AudioChoiceRow(
-                                    source.title,
-                                    selected = ui.settings.source == source.value,
-                                    enabled = !busy,
-                                    description = source.description,
-                                ) {
-                                    edit(ui.settings.copy(source = source.value))
-                                    apply()
-                                    sources = false
-                                }
-                            }
-                        }
-                    voiceRuntimeDescription(status)?.let {
-                        Text(it, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    status.routes?.let { routes ->
-                        routes.optJSONObject("voice")?.let { saved ->
-                            VoiceControls(
-                                ui.selected,
-                                routes.getLong("revision"),
-                                VoicePreferences.from(saved),
-                                enabled = !busy && !status.inUse && status.connected,
-                                supported =
-                                    remember(
-                                        routes.optJSONArray("suppression_algorithms")?.toString()
-                                    ) {
-                                        routes.optJSONArray("suppression_algorithms")?.let { values
-                                            ->
-                                            (0 until values.length()).map { values.getString(it) }
-                                        } ?: emptyList()
-                                    },
-                                failure = ui.session.error,
-                                inputRms = status.microphoneRms,
-                                apply = voice,
-                            )
-                        }
-                    }
-                    selected?.let {
-                        Text("Computer", style = MaterialTheme.typography.titleLarge)
-                        OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-                            Column(
-                                Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(it.name, style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    status.connection,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                OutlinedButton(
-                                    onClick = if (status.connected) disconnect else connect,
-                                    enabled = !busy,
-                                ) {
-                                    Text(if (status.connected) "Disconnect" else "Reconnect")
-                                }
-                            }
-                        }
-                        ComputerOutputControls(
-                            status.routes,
-                            enabled = !busy && status.connected && !status.inUse,
-                            route = route,
-                            refresh = refreshRoutes,
-                        )
-                        Text("Advanced", style = MaterialTheme.typography.titleLarge)
-                        var details by rememberSaveable { mutableStateOf(false) }
-                        ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            headlineContent = { Text("Diagnostics") },
-                            trailingContent = { Text(if (details) "−" else "+") },
-                            modifier = Modifier.clickable { details = !details },
-                        )
-                        if (details)
+                ui.message?.takeUnless { it == ui.session.error }?.let { Notice(it) }
+                error?.let { Notice(it, error = true) }
+                when (screen) {
+                    Screen.Home ->
+                        if (selected == null) {
+                            Text("Add your computer", style = MaterialTheme.typography.titleLarge)
                             Text(
-                                diagnosticReport(ui, status),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        var confirmForget by remember { mutableStateOf(false) }
-                        ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            headlineContent = {
-                                Text("Forget computer", color = MaterialTheme.colorScheme.error)
-                            },
-                            modifier = Modifier.clickable(enabled = !busy) { confirmForget = true },
-                        )
-                        if (confirmForget)
-                            AlertDialog(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                onDismissRequest = { confirmForget = false },
-                                title = { Text("Forget ${it.name}?") },
-                                text = {
-                                    Text("Pair again by tapping the computer in the Nearby list.")
-                                },
-                                confirmButton = {
-                                    TextButton(
-                                        onClick = {
-                                            confirmForget = false
-                                            forget()
-                                            settings = false
-                                        }
-                                    ) {
-                                        Text("Forget", color = MaterialTheme.colorScheme.error)
-                                    }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = { confirmForget = false }) {
-                                        Text("Cancel")
-                                    }
-                                },
-                            )
-                    }
-                    StoreOptions()
-                } else {
-                    if (selected != null) {
-                        Card(
-                            Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(28.dp),
-                            colors =
-                                CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                                ),
-                        ) {
-                            Column(
-                                Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Text("My computer", style = MaterialTheme.typography.labelLarge)
-                                Text(selected.name, style = MaterialTheme.typography.titleLarge)
-                                Text(
-                                    if (status.inUse) "In use by ${status.owner}"
-                                    else if (status.state == "Streaming")
-                                        "Audio active on this phone"
-                                    else if (status.connected) "Connected · Ready for audio"
-                                    else if (status.state == "Reconnecting") "Reconnecting…"
-                                    else
-                                        "Paired · ${if (ui.session.pending) "Connecting…" else "Offline"}"
-                                )
-                            }
-                        }
-                        if (
-                            !status.connected &&
-                                !status.reconnectAllowed &&
-                                ui.session.error != null
-                        ) {
-                            ui.nearby
-                                .firstOrNull { it.fingerprint == selected.fingerprint }
-                                ?.let { computer ->
-                                    TextButton(
-                                        onClick = { candidate = computer },
-                                        enabled = !busy,
-                                    ) {
-                                        Text("Pair again")
-                                    }
-                                }
-                        }
-                        Text("Audio", style = MaterialTheme.typography.titleLarge)
-                        DeviceDirection(
-                            "Use phone microphone",
-                            "Make your phone the microphone for your computer",
-                            0,
-                            ui.settings,
-                            status.direction(0, ui.session),
-                            status.error(0),
-                            status.generation.takeIf { status.inUse },
-                            busy,
-                            start,
-                        )
-                        if (ui.settings.mic)
-                            Text(
-                                "Select Litz Microphone in your computer’s calling app.",
+                                "Install Litz on your computer and connect both devices to the same network. Then pick your computer below.",
                                 style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        DeviceDirection(
-                            "Listen to computer",
-                            "Hear your computer through your phone",
-                            1,
-                            ui.settings,
-                            status.direction(1, ui.session),
-                            status.error(1),
-                            status.generation.takeIf { status.inUse },
-                            busy,
-                            start,
-                        )
-                        if (ui.settings.playback) {
-                            OutlinedCard(
-                                Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(24.dp),
-                            ) {
-                                Column(
-                                    Modifier.padding(20.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                            AddComputer(ui, busy, pair, cancelPair, refresh)
+                        } else {
+                            ComputerCard(
+                                selected,
+                                ui,
+                                status,
+                                busy,
+                                connect = connect,
+                                disconnect = disconnect,
+                                change = { screen = Screen.Computers },
+                                forget = forget,
+                                pairAgain = pair,
+                            )
+                            MicrophoneCard(ui.settings, status, ui.session, busy, start)
+                            ListenCard(
+                                ui.settings,
+                                status,
+                                ui.session,
+                                busy,
+                                start,
+                                edit,
+                                apply,
+                                route,
+                                refreshRoutes,
+                            )
+                        }
+                    Screen.Computers -> {
+                        val others = ui.saved.filter { it.fingerprint != ui.selected }
+                        if (selected != null || others.isNotEmpty()) {
+                            Text("Your computers", style = MaterialTheme.typography.titleLarge)
+                            selected?.let {
+                                OutlinedCard(
+                                    Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(24.dp),
                                 ) {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    ) {
-                                        Text(
-                                            "Listening volume",
-                                            Modifier.weight(1f),
-                                            style = MaterialTheme.typography.titleMedium,
-                                        )
-                                        Text(
-                                            "${(ui.settings.playbackGain * 100).toInt()}%",
-                                            style = MaterialTheme.typography.titleMedium,
-                                        )
-                                    }
-                                    Slider(
-                                        value = ui.settings.playbackGain,
-                                        onValueChange = {
-                                            edit(ui.settings.copy(playbackGain = it))
-                                        },
-                                        valueRange = 0f..2f,
-                                        enabled = !busy && !status.inUse,
-                                        modifier =
-                                            Modifier.semantics {
-                                                contentDescription = "Listening volume"
-                                            },
-                                        onValueChangeFinished = apply,
-                                    )
-                                    Text(
-                                        "100% is the original volume. Raise it to boost quiet audio.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                                    SettingValue(it.name, "Using now", enabled = false)
                                 }
                             }
-                        }
-                    }
-                    if (ui.pairing != null) {
-                        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-                            Column(
-                                Modifier.padding(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                LitzBars(Modifier.size(width = 54.dp, height = 40.dp))
-                                Text(
-                                    "Connecting to ${ui.pairing}",
-                                    style = MaterialTheme.typography.titleLarge,
-                                )
-                                val code = ui.pairingCode
-                                if (code == null) {
-                                    Text("Waiting for your computer…")
-                                } else {
-                                    Text("Allow the connection on your computer if it shows:")
-                                    Text(code, style = MaterialTheme.typography.displaySmall)
-                                    Text("If the codes differ, tap Cancel pairing.")
-                                }
-                                TextButton(onClick = cancelPair) { Text("Cancel pairing") }
-                            }
-                        }
-                    }
-                    if (ui.saved.size > 1) {
-                        Text("My computers", style = MaterialTheme.typography.titleLarge)
-                        ui.saved
-                            .filter { it.fingerprint != ui.selected }
-                            .forEach { computer ->
-                                DeviceRow(computer.name, "Paired · Tap to use", !busy) {
+                            others.forEach { computer ->
+                                ChoiceCard(computer.name, "Tap to switch", enabled = !busy) {
                                     select(computer)
                                 }
                             }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Nearby computers",
-                            style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = refresh, enabled = !busy) { Text("Refresh") }
-                    }
-                    val nearby =
-                        ui.nearby.filter { n -> ui.saved.none { it.fingerprint == n.fingerprint } }
-                    if (nearby.isEmpty())
-                        Text(
-                            if (selected == null)
-                                "Start the Litz service on your computer and connect both devices to the same network. Your computer will appear here."
-                            else if (ui.discovering) "Searching for more computers…"
-                            else "No nearby computers found. Tap Refresh to try again.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    nearby.forEach { computer ->
-                        DeviceRow(computer.name, "Nearby · Tap to pair", !busy) {
-                            candidate = computer
                         }
+                        AddComputer(ui, busy, pair, cancelPair, refresh)
                     }
-                    OutlinedButton(
-                        onClick = { manualDialog = true },
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Pair by IP address")
-                    }
-                    candidate?.let { computer ->
-                        AlertDialog(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            onDismissRequest = { candidate = null },
-                            title = { Text("Pair with ${computer.name}?") },
-                            text = {
-                                Column(
-                                    Modifier.verticalScroll(rememberScrollState()),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    Text(
-                                        "Tap Pair, then allow the connection in the prompt on ${computer.name}. This is only needed once."
-                                    )
-                                }
-                            },
-                            confirmButton = {
-                                TextButton(
-                                    onClick = {
-                                        pair(computer)
-                                        candidate = null
-                                    },
-                                    enabled = !busy,
-                                ) {
-                                    Text("Pair")
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { candidate = null }) { Text("Cancel") }
-                            },
-                        )
-                    }
-                }
-                if (manualDialog) {
-                    val endpoint = manualEndpoint(manualAddress)
-                    AlertDialog(
-                        onDismissRequest = { manualDialog = false },
-                        title = { Text("Pair by IP address") },
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text(
-                                    "Enter the computer's local IPv4 address. Litz verifies the computer's identity before saving it."
-                                )
-                                OutlinedTextField(
-                                    value = manualAddress,
-                                    onValueChange = { manualAddress = it.take(21) },
-                                    label = { Text("IP address") },
-                                    placeholder = { Text("192.168.1.10") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                OutlinedTextField(
-                                    value = manualName,
-                                    onValueChange = { manualName = it.take(64) },
-                                    label = { Text("Computer name (optional)") },
-                                    singleLine = true,
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    pair(
-                                        NearbyComputer(
-                                            manualName.trim().ifEmpty { "Computer" },
-                                            "",
-                                            endpoint!!,
-                                        )
-                                    )
-                                    manualDialog = false
-                                },
-                                enabled = endpoint != null,
-                            ) {
-                                Text("Pair")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { manualDialog = false }) { Text("Cancel") }
-                        },
-                    )
+                    Screen.Settings -> SettingsScreen(ui, status, busy, edit, apply, voice)
                 }
             }
         }
@@ -520,28 +202,416 @@ internal fun DevicesApp(
 }
 
 @Composable
-private fun ComputerOutputControls(
+private fun ComputerCard(
+    computer: SavedComputer,
+    ui: UiState,
+    status: Snapshot,
+    busy: Boolean,
+    connect: () -> Unit,
+    disconnect: () -> Unit,
+    change: () -> Unit,
+    forget: () -> Unit,
+    pairAgain: (NearbyComputer) -> Unit,
+) {
+    val nearby = ui.nearby.firstOrNull { it.fingerprint == computer.fingerprint }
+    val connecting =
+        status.state == "Reconnecting" || (ui.session.pending && !ui.quiet && !status.connected)
+    val (line, color) =
+        when {
+            !status.reconnectAllowed && !status.connected ->
+                "This computer no longer trusts this phone" to MaterialTheme.colorScheme.error
+            status.inUse -> "In use by ${status.owner}" to MaterialTheme.colorScheme.tertiary
+            status.connected -> "Connected" to MaterialTheme.colorScheme.primary
+            connecting -> "Connecting…" to MaterialTheme.colorScheme.tertiary
+            ui.disconnected -> "Disconnected" to MaterialTheme.colorScheme.outline
+            nearby != null && ui.session.error != null ->
+                "Found on your network, but not answering" to MaterialTheme.colorScheme.outline
+            else -> "Offline" to MaterialTheme.colorScheme.outline
+        }
+    var menu by remember { mutableStateOf(false) }
+    var confirmForget by remember { mutableStateOf(false) }
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors =
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    computer.name,
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Box {
+                    IconButton(onClick = { menu = true }) {
+                        Icon(painterResource(R.drawable.ic_more), contentDescription = "More")
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (status.connected) "Disconnect" else "Connect") },
+                            enabled = !busy,
+                            onClick = {
+                                menu = false
+                                if (status.connected) disconnect() else connect()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Change computer") },
+                            enabled = !busy,
+                            onClick = {
+                                menu = false
+                                change()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "Forget this computer",
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            },
+                            enabled = !busy,
+                            onClick = {
+                                menu = false
+                                confirmForget = true
+                            },
+                        )
+                    }
+                }
+            }
+            Row(
+                Modifier.padding(end = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Canvas(Modifier.size(8.dp)) { drawCircle(color) }
+                Text(line, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (!status.connected && !connecting) {
+                Text(
+                    when {
+                        !status.reconnectAllowed -> "Pair again to use it with this phone."
+                        ui.disconnected -> "Connect when you want to use audio."
+                        nearby != null ->
+                            "Make sure your computer's firewall allows Litz on UDP port 47165."
+                        else -> "Litz connects on its own when ${computer.name} is on."
+                    },
+                    Modifier.padding(top = 8.dp, end = 12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Row(Modifier.padding(top = 12.dp)) {
+                    if (!status.reconnectAllowed)
+                        nearby?.let {
+                            Button(onClick = { pairAgain(it) }, enabled = !busy) {
+                                Text("Pair again")
+                            }
+                        }
+                    else
+                        Button(onClick = connect, enabled = !busy) {
+                            Text(if (ui.disconnected) "Connect" else "Try again")
+                        }
+                }
+            }
+        }
+    }
+    if (confirmForget)
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surface,
+            onDismissRequest = { confirmForget = false },
+            title = { Text("Forget ${computer.name}?") },
+            text = { Text("To use it again, pair it from the Computers screen.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmForget = false
+                        forget()
+                    }
+                ) {
+                    Text("Forget", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Cancel") } },
+        )
+}
+
+@Composable
+private fun AddComputer(
+    ui: UiState,
+    busy: Boolean,
+    pair: (NearbyComputer) -> Unit,
+    cancelPair: () -> Unit,
+    refresh: () -> Unit,
+) {
+    var candidate by remember { mutableStateOf<NearbyComputer?>(null) }
+    var manualDialog by remember { mutableStateOf(false) }
+    if (ui.pairing != null) {
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LitzBars(Modifier.size(width = 54.dp, height = 40.dp))
+                Text("Pairing with ${ui.pairing}", style = MaterialTheme.typography.titleLarge)
+                val code = ui.pairingCode
+                if (code == null) {
+                    Text("Waiting for your computer…")
+                } else {
+                    Text("Allow the connection on your computer if it shows:")
+                    Text(code, style = MaterialTheme.typography.displaySmall)
+                    Text("If the codes differ, cancel.")
+                }
+                TextButton(onClick = cancelPair) { Text("Cancel") }
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Nearby", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        TextButton(onClick = refresh, enabled = !busy) { Text("Refresh") }
+    }
+    val nearby = ui.nearby.filter { n -> ui.saved.none { it.fingerprint == n.fingerprint } }
+    if (nearby.isEmpty())
+        Text(
+            if (ui.discovering) "Looking for computers running Litz…"
+            else "No computers found. Tap Refresh to look again.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    nearby.forEach { computer ->
+        ChoiceCard(computer.name, "Tap to pair", enabled = !busy) { candidate = computer }
+    }
+    OutlinedButton(
+        onClick = { manualDialog = true },
+        enabled = !busy,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Pair by IP address")
+    }
+    candidate?.let { computer ->
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surface,
+            onDismissRequest = { candidate = null },
+            title = { Text("Pair with ${computer.name}?") },
+            text = {
+                Text(
+                    "Tap Pair, then allow the connection on ${computer.name}. You only do this once."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pair(computer)
+                        candidate = null
+                    },
+                    enabled = !busy,
+                ) {
+                    Text("Pair")
+                }
+            },
+            dismissButton = { TextButton(onClick = { candidate = null }) { Text("Cancel") } },
+        )
+    }
+    if (manualDialog) ManualPairDialog(dismiss = { manualDialog = false }, pair = pair)
+}
+
+@Composable
+private fun ManualPairDialog(dismiss: () -> Unit, pair: (NearbyComputer) -> Unit) {
+    var address by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    val endpoint = manualEndpoint(address)
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Pair by IP address") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Enter the computer's local IPv4 address. Litz verifies the computer's identity before saving it."
+                )
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it.take(21) },
+                    label = { Text("IP address") },
+                    placeholder = { Text("192.168.1.10") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(64) },
+                    label = { Text("Computer name (optional)") },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    pair(NearbyComputer(name.trim().ifEmpty { "Computer" }, "", endpoint!!))
+                    dismiss()
+                },
+                enabled = endpoint != null,
+            ) {
+                Text("Pair")
+            }
+        },
+        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun MicrophoneCard(
+    settings: Settings,
+    status: Snapshot,
+    session: SessionStatus,
+    busy: Boolean,
+    start: (Settings) -> Unit,
+) {
+    val takeover = status.generation.takeIf { status.inUse }
+    DirectionCard(
+        "Microphone",
+        "Use your phone as a microphone",
+        settings.mic,
+        status.error(0),
+        busy,
+        toggle = { on ->
+            start(
+                settings.copy(mic = on, muted = false, input = 0, output = 0, takeover = takeover)
+            )
+        },
+    ) {
+        SettingRow(
+            "Mute",
+            if (settings.muted) "Your computer hears silence" else null,
+            enabled = !busy && takeover == null,
+            onClick = { start(settings.copy(muted = !settings.muted)) },
+        ) {
+            Switch(
+                checked = settings.muted,
+                onCheckedChange = null,
+                enabled = !busy && takeover == null,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ListenCard(
+    settings: Settings,
+    status: Snapshot,
+    session: SessionStatus,
+    busy: Boolean,
+    start: (Settings) -> Unit,
+    edit: (Settings) -> Unit,
+    apply: () -> Unit,
+    route: (Long, Any) -> Unit,
+    refreshRoutes: () -> Unit,
+) {
+    val takeover = status.generation.takeIf { status.inUse }
+    DirectionCard(
+        "Listen",
+        "Hear your computer on your phone",
+        settings.playback,
+        status.error(1),
+        busy,
+        toggle = { on ->
+            start(settings.copy(playback = on, input = 0, output = 0, takeover = takeover))
+        },
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+            Row(Modifier.fillMaxWidth()) {
+                Text("Volume", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "${(settings.playbackGain * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Slider(
+                value = settings.playbackGain,
+                onValueChange = { edit(settings.copy(playbackGain = it)) },
+                valueRange = 0f..2f,
+                enabled = !busy && !status.inUse,
+                modifier = Modifier.semantics { contentDescription = "Listening volume" },
+                onValueChangeFinished = apply,
+            )
+            Text(
+                "Above 100% boosts quiet audio.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        ComputerOutput(
+            status.routes,
+            enabled = !busy && status.connected && !status.inUse,
+            route = route,
+            refresh = refreshRoutes,
+        )
+    }
+}
+
+@Composable
+private fun DirectionCard(
+    title: String,
+    description: String,
+    on: Boolean,
+    error: String?,
+    busy: Boolean,
+    toggle: (Boolean) -> Unit,
+    details: @Composable ColumnScope.() -> Unit,
+) {
+    OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .toggleable(
+                        value = on,
+                        enabled = !busy,
+                        role = Role.Switch,
+                        onValueChange = toggle,
+                    )
+                    .semantics { contentDescription = title }
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = on, onCheckedChange = null, enabled = !busy)
+            }
+            if (on) {
+                HorizontalDivider(Modifier.padding(horizontal = 20.dp))
+                details()
+            }
+            error?.let {
+                Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Notice(it, error = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComputerOutput(
     routes: JSONObject?,
     enabled: Boolean,
     route: (Long, Any) -> Unit,
     refresh: () -> Unit,
 ) {
     var outputs by remember { mutableStateOf(false) }
-    OutlinedCard(
-        onClick = { outputs = true },
+    SettingRow(
+        "Sound from",
+        routes?.let { routeDescription(it.opt("effective"), it) } ?: "Unavailable",
         enabled = enabled && routes != null,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-    ) {
-        SettingValue(
-            "Listening from",
-            routes?.let { routeDescription(it.opt("effective"), it) } ?: "Unavailable",
-            if (enabled) "Choose which computer output to hear"
-            else "Connect to an available computer to change its output",
-            enabled = enabled && routes != null,
-        )
-    }
-    TextButton(onClick = refresh, enabled = enabled) { Text("Refresh outputs") }
+        onClick = {
+            refresh()
+            outputs = true
+        },
+    )
     if (outputs && routes != null) {
         val mirror = routes.optJSONObject("effective")?.optJSONObject("Mirror")
         fun choose(name: String?) {
@@ -551,12 +621,12 @@ private fun ComputerOutputControls(
             )
             outputs = false
         }
-        AudioChoiceSheet("Computer audio output", dismiss = { outputs = false }) {
+        AudioChoiceSheet("Sound from", dismiss = { outputs = false }) {
             AudioChoiceRow(
-                "Follow default output",
+                "Default output",
                 selected = mirror?.isNull("name") == true,
                 enabled = enabled,
-                description = "Switches when your computer changes output",
+                description = "Follows your computer when it changes output",
             ) {
                 choose(null)
             }
@@ -578,7 +648,151 @@ private fun ComputerOutputControls(
 }
 
 @Composable
-private fun DeviceRow(name: String, state: String, enabled: Boolean, action: () -> Unit) {
+private fun SettingsScreen(
+    ui: UiState,
+    status: Snapshot,
+    busy: Boolean,
+    edit: (Settings) -> Unit,
+    apply: () -> Unit,
+    voice: (Long, JSONObject) -> Unit,
+) {
+    var sources by remember { mutableStateOf(false) }
+    SectionHeader("Phone microphone")
+    OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            SettingRow(
+                "Recording mode",
+                recordingModeDescription(ui.settings.source, status),
+                enabled = !busy,
+                onClick = { sources = true },
+            )
+        }
+    }
+    if (sources)
+        AudioChoiceSheet("Recording mode", dismiss = { sources = false }) {
+            microphoneSources.forEach { source ->
+                AudioChoiceRow(
+                    source.title,
+                    selected = ui.settings.source == source.value,
+                    enabled = !busy,
+                    description = source.description,
+                ) {
+                    edit(ui.settings.copy(source = source.value))
+                    apply()
+                    sources = false
+                }
+            }
+        }
+    SectionHeader("Voice processing on your computer")
+    voiceRuntimeDescription(status)?.let { Notice(it) }
+    val saved = status.routes?.optJSONObject("voice")
+    if (saved == null)
+        OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+            Column(Modifier.padding(vertical = 6.dp)) {
+                SettingRow(
+                    "Not connected",
+                    "Connect to your computer to adjust voice processing.",
+                    enabled = false,
+                )
+            }
+        }
+    else
+        VoiceControls(
+            ui.selected,
+            status.routes.getLong("revision"),
+            VoicePreferences.from(saved),
+            enabled = !busy && !status.inUse && status.connected,
+            supported =
+                remember(status.routes.optJSONArray("suppression_algorithms")?.toString()) {
+                    status.routes.optJSONArray("suppression_algorithms")?.let { values ->
+                        (0 until values.length()).map { values.getString(it) }
+                    } ?: emptyList()
+                },
+            failure = ui.session.error,
+            inputRms = status.microphoneRms,
+            apply = voice,
+        )
+    SectionHeader("About")
+    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
+    var details by rememberSaveable { mutableStateOf(false) }
+    OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+        Column(Modifier.padding(vertical = 6.dp)) {
+            SettingRow("Litz ${BuildConfig.VERSION_NAME}", "Free software, GNU GPL 3.0 or later")
+            SettingRow(
+                "Source code",
+                "github.com/ArturoAtomplay/litz-audio",
+                onClick = { uriHandler.openUri(SOURCE_URL) },
+            )
+            StoreOptions()
+            SettingRow(
+                "Diagnostics",
+                "Details to include in a bug report",
+                onClick = { details = !details },
+            ) {
+                Text(
+                    if (details) "Hide" else "Show",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (details) {
+                val sections = diagnostics(ui, status)
+                Surface(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        sections.forEach { section ->
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    section.title,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                section.rows.forEach { (label, value) ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(
+                                            label,
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            value,
+                                            Modifier.weight(1.4f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            textAlign = TextAlign.End,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        context
+                            .getSystemService(ClipboardManager::class.java)
+                            .setPrimaryClip(
+                                ClipData.newPlainText("Litz diagnostics", diagnosticText(sections))
+                            )
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) {
+                    Text("Copy report")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceCard(name: String, state: String, enabled: Boolean, action: () -> Unit) {
     OutlinedCard(
         onClick = action,
         enabled = enabled,
@@ -590,70 +804,7 @@ private fun DeviceRow(name: String, state: String, enabled: Boolean, action: () 
 }
 
 @Composable
-private fun DeviceDirection(
-    title: String,
-    description: String,
-    index: Int,
-    settings: Settings,
-    direction: String,
-    error: String?,
-    takeover: Long?,
-    busy: Boolean,
-    start: (Settings) -> Unit,
-) {
-    val enabled = if (index == 0) settings.mic else settings.playback
-    OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                Modifier.fillMaxWidth()
-                    .toggleable(
-                        value = enabled,
-                        enabled = !busy,
-                        role = Role.Switch,
-                        onValueChange = { value ->
-                            val next =
-                                if (index == 0)
-                                    settings.copy(mic = value, muted = false, input = 0, output = 0)
-                                else settings.copy(playback = value, input = 0, output = 0)
-                            start(next.copy(takeover = takeover))
-                        },
-                    )
-                    .semantics { contentDescription = title },
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                Switch(checked = enabled, onCheckedChange = null, enabled = !busy)
-            }
-            Text(
-                description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                direction,
-                style = MaterialTheme.typography.labelLarge,
-                color =
-                    when (direction) {
-                        "Running" -> MaterialTheme.colorScheme.primary
-                        "Error" -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-            )
-            if (index == 0 && enabled)
-                OutlinedButton(
-                    onClick = { start(settings.copy(muted = !settings.muted)) },
-                    enabled = !busy && takeover == null,
-                ) {
-                    Text(if (settings.muted) "Unmute microphone" else "Mute microphone")
-                }
-            error?.let { DeviceNotice(it, error = true) }
-        }
-    }
-}
-
-@Composable
-private fun DeviceNotice(text: String, error: Boolean = false) {
+private fun Notice(text: String, error: Boolean = false) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color =

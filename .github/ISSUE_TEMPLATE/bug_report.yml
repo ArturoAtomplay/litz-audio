@@ -40,5 +40,5 @@ body:
     id: diagnostics
     attributes:
       label: Diagnostics
-      description: Copy the report from Settings → Advanced → Diagnostics in the app, and any `litzd` log output.
+      description: Copy the report from Settings → About → Diagnostics in the app, and any `litzd` log output.
       render: text

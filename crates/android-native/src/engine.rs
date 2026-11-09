@@ -901,9 +901,7 @@ fn status(
         "owner":c.and_then(|c|c.owner.as_ref()), "ownership_generation":c.map(|c|c.generation), "owned":c.is_some_and(|c|c.owned),
         "desktop_routes": c.and_then(|c| c.desktop.as_ref()),
         "applied": c.map(|c| &c.media.settings),
-        "error": error, "profile":c.map(|_| "Balanced"),
-        "stream_rate":c.map(|_| 48000), "frame_ms":c.map(|_| 10),
-        "microphone_channels":c.map(|_| 1), "playback_channels":c.map(|_| 2),
+        "error": error,
         "microphone_rms":c.map(|c| c.media.microphone_rms),
         "audio":audio.map(Audio::info),
         "underruns": audio.map(|a| a.info().output_xruns),
@@ -911,8 +909,6 @@ fn status(
         "rtt_ms": c.map(|c| c.media.connection.rtt().as_secs_f64()*1000.0),
         "jitter_ms":listening.as_ref().map(|l| l.buffer_ms), "late_packets": listening.as_ref().map(|l| l.late),
         "concealed_frames":listening.as_ref().map(|l| l.concealed), "transport_drops":c.map(|c|c.media.dropped),
-        "estimated_total_ms":serde_json::Value::Null,
-        "latency_note":"End-to-end latency unknown until hardware correlation; RTT is not one-way latency. OEM processing is unverified."
     }).to_string()
 }
 #[derive(Debug, PartialEq)]

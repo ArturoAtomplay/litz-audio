@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -23,6 +24,9 @@ import kotlinx.coroutines.flow.update
 import org.json.JSONObject
 
 @Immutable internal data class Device(val id: Int, val label: String)
+
+internal fun retryDelay(seen: Boolean, failures: Int): Long =
+    if (seen) 2_000L shl failures.coerceIn(0, 3) else 60_000L
 
 sealed interface SessionLifecycle {
     data object Idle : SessionLifecycle
@@ -51,6 +55,8 @@ internal data class UiState(
     val pairing: String? = null,
     val pairingCode: String? = null,
     val discovering: Boolean = false,
+    val quiet: Boolean = false,
+    val disconnected: Boolean = false,
 ) {
     val lifecycle: SessionLifecycle
         get() {
@@ -130,6 +136,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     private var disconnected = false
+        set(value) {
+            field = value
+            mutable.update { it.copy(disconnected = value) }
+        }
+
+    private var lastAttempt = SystemClock.elapsedRealtime()
     private var visible = false
     private var addressAttempt = 0
     private var usbSubnets: List<UsbSubnet> = emptyList()
@@ -140,7 +152,10 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         if (value) reconnectIfIdle()
     }
 
-    private fun reconnectIfIdle() {
+    private fun seen(ui: UiState) =
+        ui.nearby.any { it.fingerprint == ui.selected } || usbEndpoint?.first == ui.selected
+
+    private fun reconnectIfIdle(): Boolean {
         val ui = mutable.value
         if (
             visible &&
@@ -158,8 +173,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 ?.endpoints
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { service?.address(it[Math.floorMod(addressAttempt++, it.size)]) }
-            service?.connect()
+            val service = service ?: return false
+            mutable.update { it.copy(quiet = true) }
+            service.connect()
+            return true
         }
+        return false
     }
 
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
@@ -232,13 +251,19 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         viewModelScope.launch {
-            var backoff = 1000L
+            var failures = 0
             while (isActive) {
-                delay(backoff)
-                reconnectIfIdle()
-                backoff =
-                    if (Snapshot(mutable.value.session).connected) 1000L
-                    else (backoff * 2).coerceAtMost(16000L)
+                delay(2000)
+                val ui = mutable.value
+                if (Snapshot(ui.session).connected) {
+                    failures = 0
+                    continue
+                }
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastAttempt >= retryDelay(seen(ui), failures) && reconnectIfIdle()) {
+                    lastAttempt = now
+                    failures++
+                }
             }
         }
         viewModelScope.launch {
@@ -360,7 +385,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     internal fun pair(computer: NearbyComputer) {
         if (pairJob != null) return
         disconnected = false
-        mutable.update { it.copy(pairing = computer.name, message = null) }
+        mutable.update { it.copy(pairing = computer.name, message = null, quiet = false) }
         pairJob =
             viewModelScope.launch {
                 try {
@@ -480,6 +505,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun select(computer: SavedComputer) {
         disconnected = false
+        mutable.update { it.copy(quiet = false) }
         viewModelScope.launch {
             try {
                 service?.disconnectAndWait()
@@ -543,7 +569,9 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     }
 
     internal fun connect() {
+        lastAttempt = SystemClock.elapsedRealtime()
         disconnected = false
+        mutable.update { it.copy(quiet = false) }
         service?.connect() ?: message("Service is starting; try Connect again")
     }
 
@@ -570,6 +598,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         disconnected = false
+        mutable.update { it.copy(quiet = false) }
         edit(settings)
         draft = null
         try {

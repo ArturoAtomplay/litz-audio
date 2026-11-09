@@ -1,6 +1,7 @@
 package audio.litz
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -121,3 +122,61 @@ internal fun AudioChoiceRow(
             ),
     )
 }
+
+@Composable
+internal fun SectionHeader(title: String) {
+    Text(
+        title,
+        Modifier.padding(start = 4.dp, top = 8.dp),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+internal fun SettingRow(
+    title: String,
+    value: String? = null,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .then(
+                if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick)
+                else Modifier
+            )
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color =
+                    if (enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            )
+            value?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        when {
+            trailing != null -> trailing()
+            onClick != null && enabled -> DisclosureIndicator()
+        }
+    }
+}
+
+@Composable
+internal fun quietSliderColors() =
+    SliderDefaults.colors(
+        activeTickColor = Color.Transparent,
+        inactiveTickColor = Color.Transparent,
+    )

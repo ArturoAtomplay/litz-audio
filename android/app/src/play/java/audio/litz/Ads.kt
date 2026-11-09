@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -14,10 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -148,9 +144,8 @@ internal fun StoreOptions() {
     val required by Ads.privacyOptions.collectAsStateWithLifecycle()
     val activity = LocalActivity.current
     if (!required || activity == null) return
-    ListItem(
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        headlineContent = { Text("Ad privacy choices") },
-        modifier = Modifier.clickable { UserMessagingPlatform.showPrivacyOptionsForm(activity) {} },
+    SettingRow(
+        "Ad privacy choices",
+        onClick = { UserMessagingPlatform.showPrivacyOptionsForm(activity) {} },
     )
 }

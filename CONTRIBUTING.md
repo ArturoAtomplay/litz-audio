@@ -9,7 +9,7 @@ Open an issue with the bug report form. Include:
 - the Litz version on the phone and on the computer (`litzd --version`),
 - the phone model and Android version, and the computer's OS (and PipeWire version on Linux),
 - what you did, what you expected and what happened,
-- the report from **Settings → Advanced → Diagnostics** in the app, if you can open it.
+- the report from **Settings → About → Diagnostics** in the app, if you can open it.
 
 Report security problems privately as described in [SECURITY.md](SECURITY.md), not in an issue.
 
