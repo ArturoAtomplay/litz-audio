@@ -585,9 +585,9 @@ impl Streaming<'_> {
     async fn send_capture(&mut self) -> Result<()> {
         let mut failed = self.ports.capture_fault.swap(false, Ordering::AcqRel);
         if let Some(capture) = &mut self.ports.capture {
-            for _ in 0..crate::audio::capture::CAPACITY {
+            for popped in 0..crate::audio::capture::CAPACITY {
                 let Ok(frame) = capture.pop() else { break };
-                if frame.at.elapsed() > Duration::from_millis(40) {
+                if popped == 0 && frame.at.elapsed() > Duration::from_millis(40) {
                     failed = true;
                 }
                 let Some(encoder) = &mut self.encoder else {
