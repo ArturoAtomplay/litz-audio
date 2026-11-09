@@ -32,6 +32,7 @@ Source: "..\..\THIRD_PARTY_NOTICES"; DestDir: "{app}"
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Litz Audio"; ValueData: """{app}\litzd.exe"""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\LitzAudio"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{BFD99F34-90AE-4D6D-A33A-6EB4D6FCC2A4}"; Flags: uninsdeletekey dontcreatekey
 [Run]
 Filename: "{app}\litzd.exe"; Flags: nowait runhidden
 Filename: "https://vb-audio.com/Cable/"; Description: "Open the virtual microphone driver download (needed only for phone microphone)"; Flags: shellexec postinstall skipifsilent unchecked

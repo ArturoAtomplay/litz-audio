@@ -147,47 +147,120 @@ mod notification {
 #[cfg(windows)]
 pub async fn approve(request: &Request<'_>) -> bool {
     let (question, details) = (request.question(), request.details());
-    let answer = tokio::task::spawn_blocking(move || match toast::ask(&question, &details) {
-        Ok(answer) => answer,
-        Err(error) => {
-            eprintln!("litzd: no notification ({error}); asking in a window");
-            message_box(&format!("{question}\n\n{details}"))
+    match tokio::task::spawn_blocking(move || toast::ask(&question, &details)).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(error)) => {
+            eprintln!("litzd: approval notification failed: {error}");
+            false
         }
-    });
-    matches!(answer.await, Ok(true))
+        Err(_) => false,
+    }
 }
 
 #[cfg(windows)]
 mod toast {
     use super::APPROVAL_WINDOW;
-    use std::sync::mpsc;
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, OnceLock, mpsc};
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::Foundation::TypedEventHandler;
     use windows::UI::Notifications::{
-        NotificationSetting, ToastActivatedEventArgs, ToastNotification, ToastNotificationManager,
+        ToastActivatedEventArgs, ToastDismissalReason, ToastDismissedEventArgs, ToastNotification,
+        ToastNotificationManager,
+    };
+    use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_FAIL, E_POINTER};
+    use windows::Win32::System::Com::{
+        CLSCTX_LOCAL_SERVER, CoIncrementMTAUsage, CoRegisterClassObject, IClassFactory,
+        IClassFactory_Impl, REGCLS_MULTIPLEUSE,
     };
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
-    use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
-    use windows::Win32::UI::Shell::{QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState};
-    use windows::core::{HSTRING, IInspectable, Interface, PCWSTR, Ref, w};
+    use windows::Win32::UI::Notifications::{
+        INotificationActivationCallback, INotificationActivationCallback_Impl,
+        NOTIFICATION_USER_INPUT_DATA,
+    };
+    use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+    use windows::core::{
+        BOOL, Error, GUID, HSTRING, IInspectable, IUnknown, Interface, PCWSTR, Ref, Result,
+        implement, w,
+    };
 
-    const APP_ID: &str = "LitzAudio";
+    const APP_ID: PCWSTR = w!("LitzAudio");
+    const ACTIVATOR: GUID = GUID::from_u128(0xBFD99F34_90AE_4D6D_A33A_6EB4D6FCC2A4);
 
-    fn escape(text: &str) -> String {
-        text.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
+    static PENDING: Mutex<Option<(u64, mpsc::Sender<Result<bool>>)>> = Mutex::new(None);
+
+    fn reply(arguments: &str) {
+        let Some((choice, id)) = arguments.split_once(' ') else {
+            return;
+        };
+        let mut pending = PENDING.lock().unwrap();
+        if pending
+            .as_ref()
+            .is_some_and(|(current, _)| id == current.to_string())
+            && let Some((_, sender)) = pending.take()
+        {
+            let _ = sender.send(Ok(choice == "allow"));
+        }
     }
 
-    fn set(name: PCWSTR, value: &str) -> windows::core::Result<()> {
+    #[implement(INotificationActivationCallback)]
+    struct Activator;
+
+    impl INotificationActivationCallback_Impl for Activator_Impl {
+        fn Activate(
+            &self,
+            _: &PCWSTR,
+            arguments: &PCWSTR,
+            _: *const NOTIFICATION_USER_INPUT_DATA,
+            _: u32,
+        ) -> Result<()> {
+            if !arguments.is_null() {
+                // SAFETY: COM passes a NUL-terminated string valid for this call.
+                if let Ok(arguments) = unsafe { arguments.to_string() } {
+                    reply(&arguments);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[implement(IClassFactory)]
+    struct Factory;
+
+    impl IClassFactory_Impl for Factory_Impl {
+        fn CreateInstance(
+            &self,
+            outer: Ref<IUnknown>,
+            iid: *const GUID,
+            object: *mut *mut c_void,
+        ) -> Result<()> {
+            if object.is_null() {
+                return Err(E_POINTER.into());
+            }
+            // SAFETY: COM supplies a writable interface out pointer.
+            unsafe { *object = std::ptr::null_mut() };
+            if outer.as_ref().is_some() {
+                return Err(CLASS_E_NOAGGREGATION.into());
+            }
+            let activator: INotificationActivationCallback = Activator.into();
+            // SAFETY: `iid` and `object` are COM's CreateInstance arguments.
+            unsafe { activator.query(iid, object).ok() }
+        }
+
+        fn LockServer(&self, _: BOOL) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn set(key: PCWSTR, name: PCWSTR, value: &str) -> Result<()> {
         let value: Vec<u16> = value.encode_utf16().chain([0]).collect();
-        // SAFETY: the subkey and name are static NUL-terminated strings and
-        // `value` is a live NUL-terminated buffer of the given byte length.
+        // SAFETY: `key` and `name` are NUL-terminated or null, and `value` is a
+        // live NUL-terminated buffer of the given byte length.
         unsafe {
             RegSetKeyValueW(
                 HKEY_CURRENT_USER,
-                w!("Software\\Classes\\AppUserModelId\\LitzAudio"),
+                key,
                 name,
                 REG_SZ.0,
                 Some(value.as_ptr().cast()),
@@ -197,107 +270,92 @@ mod toast {
         }
     }
 
-    fn register() -> windows::core::Result<()> {
-        set(w!("DisplayName"), "Litz Audio")?;
-        if let Some(icon) = std::env::current_exe()
-            .ok()
-            .and_then(|exe| Some(exe.parent()?.join("litz.png")))
+    fn register() -> Result<()> {
+        let exe = std::env::current_exe().map_err(|error| Error::new(E_FAIL, error.to_string()))?;
+        let app = w!("Software\\Classes\\AppUserModelId\\LitzAudio");
+        set(app, w!("DisplayName"), "Litz Audio")?;
+        set(app, w!("CustomActivator"), &format!("{{{ACTIVATOR:?}}}"))?;
+        if let Some(icon) = exe
+            .parent()
+            .map(|dir| dir.join("litz.png"))
             .filter(|icon| icon.is_file())
         {
-            set(w!("IconUri"), &icon.to_string_lossy())?;
+            set(app, w!("IconUri"), &icon.to_string_lossy())?;
+        }
+        set(
+            w!("Software\\Classes\\CLSID\\{BFD99F34-90AE-4D6D-A33A-6EB4D6FCC2A4}\\LocalServer32"),
+            PCWSTR::null(),
+            &format!("\"{}\" -ToastActivated", exe.display()),
+        )?;
+        // SAFETY: APP_ID is a static NUL-terminated string. The MTA usage is
+        // never released, so the class object stays reachable for the
+        // process lifetime.
+        unsafe {
+            SetCurrentProcessExplicitAppUserModelID(APP_ID)?;
+            CoIncrementMTAUsage()?;
+            let factory: IClassFactory = Factory.into();
+            CoRegisterClassObject(
+                &ACTIVATOR,
+                &factory,
+                CLSCTX_LOCAL_SERVER,
+                REGCLS_MULTIPLEUSE,
+            )?;
         }
         Ok(())
     }
 
-    pub fn ask(question: &str, details: &str) -> windows::core::Result<bool> {
-        // SAFETY: called on a blocking-pool thread; an existing apartment of
-        // either kind is fine because only agile WinRT objects are used.
-        let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
-        // SAFETY: no arguments; the call only reads shell state.
-        if unsafe { SHQueryUserNotificationState()? } != QUNS_ACCEPTS_NOTIFICATIONS {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_ABORT,
-                "notifications are silenced",
-            ));
+    fn escape(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
+    pub fn ask(question: &str, details: &str) -> Result<bool> {
+        static REGISTERED: OnceLock<()> = OnceLock::new();
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        if REGISTERED.get().is_none() {
+            register()?;
+            let _ = REGISTERED.set(());
         }
-        register()?;
-        let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))?;
-        if notifier.Setting()? != NotificationSetting::Enabled {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_ACCESSDENIED,
-                "notifications are turned off for Litz",
-            ));
-        }
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = mpsc::channel();
+        *PENDING.lock().unwrap() = Some((id, sender.clone()));
         let xml = XmlDocument::new()?;
         xml.LoadXml(&HSTRING::from(format!(
-            r#"<toast scenario="reminder"><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual><actions><action content="Allow" arguments="allow" activationType="foreground"/><action content="Deny" arguments="deny" activationType="foreground"/></actions></toast>"#,
+            r#"<toast scenario="reminder" launch="deny {id}"><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual><actions><action content="Allow" arguments="allow {id}" activationType="foreground"/><action content="Deny" arguments="deny {id}" activationType="foreground"/></actions></toast>"#,
             escape(question),
             escape(details)
         )))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
-        let (sender, receiver) = mpsc::channel();
-        let activated = sender.clone();
-        toast.Activated(&TypedEventHandler::new(
-            move |_, args: Ref<IInspectable>| {
-                let allow = args.ok()?.cast::<ToastActivatedEventArgs>()?.Arguments()? == "allow";
-                let _ = activated.send(Ok(allow));
+        toast.Activated(&TypedEventHandler::new(|_, args: Ref<IInspectable>| {
+            reply(
+                &args
+                    .ok()?
+                    .cast::<ToastActivatedEventArgs>()?
+                    .Arguments()?
+                    .to_string(),
+            );
+            Ok(())
+        }))?;
+        toast.Dismissed(&TypedEventHandler::new(
+            move |_, args: Ref<ToastDismissedEventArgs>| {
+                if args.ok()?.Reason()? == ToastDismissalReason::UserCanceled {
+                    reply(&format!("deny {id}"));
+                }
                 Ok(())
             },
         ))?;
-        let dismissed = sender.clone();
-        toast.Dismissed(&TypedEventHandler::new(move |_, _| {
-            let _ = dismissed.send(Ok(false));
-            Ok(())
-        }))?;
         toast.Failed(&TypedEventHandler::new(move |_, _| {
-            let _ = sender.send(Err(windows::core::Error::from(
-                windows::Win32::Foundation::E_FAIL,
-            )));
+            let _ = sender.send(Err(E_FAIL.into()));
             Ok(())
         }))?;
+        let notifier =
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from("LitzAudio"))?;
         notifier.Show(&toast)?;
         let answer = receiver.recv_timeout(APPROVAL_WINDOW);
+        PENDING.lock().unwrap().take();
         let _ = notifier.Hide(&toast);
         answer.unwrap_or(Ok(false))
-    }
-}
-
-#[cfg(windows)]
-fn message_box(text: &str) -> bool {
-    use std::sync::mpsc;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MessageBoxW,
-        PostMessageW, WM_CLOSE,
-    };
-
-    let title: Vec<u16> = "Litz Audio\0".encode_utf16().collect();
-    let body: Vec<u16> = format!("{text}\0").encode_utf16().collect();
-    let caption = title.clone();
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        // SAFETY: both NUL-terminated UTF-16 buffers outlive the call.
-        let answer = unsafe {
-            MessageBoxW(
-                std::ptr::null_mut(),
-                body.as_ptr(),
-                title.as_ptr(),
-                MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST,
-            )
-        };
-        let _ = sender.send(answer);
-    });
-    match receiver.recv_timeout(APPROVAL_WINDOW) {
-        Ok(answer) => answer == IDYES,
-        Err(_) => {
-            // SAFETY: the caption is a live NUL-terminated buffer; the handle
-            // is only used to post a close message.
-            unsafe {
-                let window = FindWindowW(std::ptr::null(), caption.as_ptr());
-                if !window.is_null() {
-                    PostMessageW(window, WM_CLOSE, 0, 0);
-                }
-            }
-            false
-        }
     }
 }

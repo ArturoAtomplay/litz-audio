@@ -27,6 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|_| "Arguments must be valid Unicode")
         })
         .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(windows)]
+    if args.first().is_some_and(|arg| arg == "-ToastActivated") {
+        return Ok(());
+    }
     match cli::parse(args)? {
         cli::Command::Help => {
             println!("{}", cli::HELP);
