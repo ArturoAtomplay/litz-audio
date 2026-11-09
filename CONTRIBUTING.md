@@ -45,6 +45,20 @@ android/gradlew -p android checkKotlinFormat :app:testFossDebugUnitTest :app:tes
 
 Format Kotlin with `android/gradlew -p android formatKotlin`. If you change Android dependencies, refresh the lock and checksum files with `--write-locks --write-verification-metadata sha256` and commit them.
 
+### Running a development build on NixOS
+
+The NixOS firewall blocks phones from reaching a `litzd` you start by hand; the NixOS module opens the port only for the installed service. Open it once in your configuration:
+
+```nix
+networking.firewall.allowedUDPPorts = [ 47165 ];
+```
+
+Or open it until the next reboot without rebuilding, and close it again with `sudo nixos-firewall-tool reset`:
+
+```sh
+sudo nixos-firewall-tool open udp 47165
+```
+
 ## Code layout
 
 - `crates/core/`: protocol, media and transport shared by all platforms.
