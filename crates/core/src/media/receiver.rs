@@ -1,7 +1,10 @@
 use super::codec::Decoder;
 use crate::protocol::{Config, FRAME, HEADER, Header, MAX_DATAGRAM};
 use audioadapter_buffers::direct::InterleavedSlice;
-use rubato::{Async, FixedAsync, Resampler, SincInterpolationParameters, WindowFunction};
+use rubato::{
+    Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
+};
 
 /// Frames produced per `render` call.
 pub const CHUNK: usize = FRAME / 4;
@@ -66,7 +69,9 @@ impl Receiver {
         if !config.valid() {
             return Err("invalid config".into());
         }
-        let params = SincInterpolationParameters::new(256, WindowFunction::BlackmanHarris2);
+        let params = SincInterpolationParameters::new(128, WindowFunction::BlackmanHarris2)
+            .oversampling_factor(256)
+            .interpolation(SincInterpolationType::Linear);
         Ok(Self {
             config,
             slots: std::array::from_fn(|_| Slot {
