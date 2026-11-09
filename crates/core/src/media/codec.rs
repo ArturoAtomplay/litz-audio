@@ -26,6 +26,7 @@ impl Encoder {
         encoder.set_vbr(true)?;
         encoder.set_vbr_constraint(true)?;
         encoder.set_dtx(false)?;
+        encoder.set_complexity(7)?;
         Ok(Self {
             encoder,
             config,
