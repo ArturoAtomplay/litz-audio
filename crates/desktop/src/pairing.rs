@@ -211,13 +211,24 @@ impl Hub {
         }
     }
     fn state(lease: &Lease, connection: &quinn::Connection) -> Message {
-        Message::Ownership {
-            generation: lease.generation,
-            owner: lease.owner.as_ref().map(|o| o.name.clone()),
-            owned: lease
+        let owned = lease
+            .owner
+            .as_ref()
+            .is_some_and(|o| o.connection.stable_id() == connection.stable_id());
+        let peer = transport::peer_certificate(connection).ok();
+        let stale_self = !owned
+            && lease
                 .owner
                 .as_ref()
-                .is_some_and(|o| o.connection.stable_id() == connection.stable_id()),
+                .is_some_and(|o| peer.as_deref() == Some(o.certificate.as_slice()));
+        Message::Ownership {
+            generation: lease.generation,
+            owner: lease
+                .owner
+                .as_ref()
+                .filter(|_| !stale_self)
+                .map(|o| o.name.clone()),
+            owned,
         }
     }
     pub fn status(&self, connection: &quinn::Connection) -> Message {
@@ -390,6 +401,14 @@ mod tests {
         let _replacement_client = replacement_client?;
         let replacement_server = replacement_server?;
         hub.register(&replacement_server)?;
+        assert!(matches!(
+            hub.status(&replacement_server),
+            Message::Ownership {
+                owner: None,
+                owned: false,
+                ..
+            }
+        ));
         assert!(matches!(
             hub.acquire(&two, &replacement_server, None)?,
             Message::Ownership {
