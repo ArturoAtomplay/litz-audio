@@ -22,6 +22,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 internal val microphoneSources =
@@ -214,12 +216,23 @@ private fun ComputerCard(
     val connecting =
         status.state == "Reconnecting" ||
             (ui.session.pending && !status.connected && (!ui.quiet || nearby != null))
+    val usb by
+        produceState(false, status.endpoint) {
+            value =
+                status.endpoint?.let { endpoint ->
+                    withContext(Dispatchers.IO) {
+                        UsbRoutes.subnets().any { it.contains(endpoint) }
+                    }
+                } == true
+        }
     val (line, color) =
         when {
             !status.reconnectAllowed && !status.connected ->
                 "This computer no longer trusts this phone" to MaterialTheme.colorScheme.error
             status.inUse -> "In use by ${status.owner}" to MaterialTheme.colorScheme.tertiary
-            status.connected -> "Connected" to MaterialTheme.colorScheme.primary
+            status.connected ->
+                (if (usb) "Connected over USB" else "Connected") to
+                    MaterialTheme.colorScheme.primary
             connecting -> "Connecting…" to MaterialTheme.colorScheme.tertiary
             nearby != null && ui.session.error != null ->
                 "Found on your network, but not answering" to MaterialTheme.colorScheme.outline

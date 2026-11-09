@@ -9,6 +9,7 @@ internal class Snapshot(status: SessionStatus) {
     private val json = runCatching { JSONObject(status.json) }.getOrDefault(JSONObject())
     val state: String = json.optString("state", "Idle")
     val connected = state == "Authenticated" || state == "Streaming"
+    val endpoint = json.optString("connected_endpoint").takeUnless { it.isBlank() || it == "null" }
     val reconnectAllowed = json.optBoolean("reconnect_allowed", true)
     val owner = json.optString("owner").takeUnless { it.isBlank() || it == "null" }
     val generation = json.optLong("ownership_generation")
