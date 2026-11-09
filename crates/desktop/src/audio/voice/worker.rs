@@ -18,33 +18,44 @@ const AUTOMATIC_THRESHOLD_FACTOR: f32 = 4.0;
 // 100–600 Hz @ 48 kHz (lags 80–480).
 pub(super) fn periodicity(previous: &[f32; FRAME], current: &[f32; FRAME]) -> f32 {
     let count = FRAME as f64;
-    let sum = current.iter().map(|x| f64::from(*x)).sum::<f64>();
-    let energy = current.iter().map(|x| f64::from(x * x)).sum::<f64>() - sum * sum / count;
+    let mut signal = [0.0; 2 * FRAME];
+    signal[..FRAME].copy_from_slice(previous);
+    signal[FRAME..].copy_from_slice(current);
+    let mut sums = [(0.0f64, 0.0f64); 2 * FRAME + 1];
+    for (i, x) in signal.iter().enumerate() {
+        let x = f64::from(*x);
+        sums[i + 1] = (sums[i].0 + x, sums[i].1 + x * x);
+    }
+    let window = |start: usize| {
+        let (head, tail) = (sums[start], sums[start + FRAME]);
+        (tail.0 - head.0, tail.1 - head.1)
+    };
+    let (sum, energy) = window(FRAME);
+    let energy = energy - sum * sum / count;
     if energy < 1e-6 {
         return 0.0;
     }
     let mut strongest = 0.0f64;
     for lag in (80..=480).step_by(4) {
-        let mut dot = 0.0;
-        let mut delayed_sum = 0.0;
-        let mut delayed_energy = 0.0;
-        for (i, sample) in current.iter().enumerate() {
-            let delayed = if i >= lag {
-                current[i - lag]
-            } else {
-                previous[FRAME + i - lag]
-            };
-            dot += f64::from(*sample * delayed);
-            delayed_sum += f64::from(delayed);
-            delayed_energy += f64::from(delayed * delayed);
-        }
+        let (delayed_sum, delayed_energy) = window(FRAME - lag);
         let variance = delayed_energy - delayed_sum * delayed_sum / count;
         if variance > 1e-6 {
+            let dot = f64::from(dot(current, &signal[FRAME - lag..2 * FRAME - lag]));
             strongest =
                 strongest.max((dot - sum * delayed_sum / count) / (energy * variance).sqrt());
         }
     }
     strongest.clamp(0.0, 1.0) as f32
+}
+
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let mut lanes = [0.0f32; 8];
+    for (a, b) in a.as_chunks::<8>().0.iter().zip(b.as_chunks::<8>().0) {
+        for lane in 0..8 {
+            lanes[lane] += a[lane] * b[lane];
+        }
+    }
+    lanes.iter().sum()
 }
 
 /// Bounded RMS level adaptation, followed by a sample-peak envelope limiter.
@@ -280,20 +291,24 @@ impl Pipeline {
             0.0
         };
         self.noise.process(samples)?;
-        for sample in samples.iter_mut() {
-            if self.settling > 0 {
-                for (filter, target) in self.eq.iter_mut().zip(&self.eq_target) {
-                    for (value, goal) in filter.b.iter_mut().zip(target.b) {
-                        *value += (goal - *value) / self.settling as f64;
+        if self.settling == 0 && self.settings.eq_db == [0; 3] {
+            self.eq.iter_mut().for_each(|filter| filter.z = [0.0; 2]);
+        } else {
+            for sample in samples.iter_mut() {
+                if self.settling > 0 {
+                    for (filter, target) in self.eq.iter_mut().zip(&self.eq_target) {
+                        for (value, goal) in filter.b.iter_mut().zip(target.b) {
+                            *value += (goal - *value) / self.settling as f64;
+                        }
+                        for (value, goal) in filter.a.iter_mut().zip(target.a) {
+                            *value += (goal - *value) / self.settling as f64;
+                        }
                     }
-                    for (value, goal) in filter.a.iter_mut().zip(target.a) {
-                        *value += (goal - *value) / self.settling as f64;
-                    }
+                    self.settling -= 1;
                 }
-                self.settling -= 1;
-            }
-            for filter in &mut self.eq {
-                *sample = filter.process(*sample);
+                for filter in &mut self.eq {
+                    *sample = filter.process(*sample);
+                }
             }
         }
         self.level.process(samples, p);
