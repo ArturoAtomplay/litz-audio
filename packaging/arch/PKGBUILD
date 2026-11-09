@@ -13,8 +13,8 @@ provides=('litz-audio')
 conflicts=('litz-audio')
 source_x86_64=("https://github.com/ArturoAtomplay/litz-audio/releases/download/v$pkgver/litz-$pkgver-linux-x86_64.tar.gz")
 source_aarch64=("https://github.com/ArturoAtomplay/litz-audio/releases/download/v$pkgver/litz-$pkgver-linux-aarch64.tar.gz")
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('0c2f5038142e17c8c021196b9ed0bc18d3d2414f2820f62dd06eee2358414d29')
+sha256sums_aarch64=('d56ff62541ad7aa2e179c4e9bc2eefac9e31b257f64019a46426af96d53bfdae')
 
 package() {
   cd "litz-$pkgver-linux-$CARCH"
