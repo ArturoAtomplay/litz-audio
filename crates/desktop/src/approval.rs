@@ -34,9 +34,9 @@ fn now() -> u64 {
 }
 
 #[cfg(target_os = "linux")]
-pub async fn approve(request: &Request<'_>) -> bool {
+pub async fn approve(request: &Request<'_>) -> Option<bool> {
     match notification::ask(request).await {
-        Ok(answer) => answer,
+        Ok(answer) => Some(answer),
         Err(error) => {
             eprintln!("litzd: no desktop notification ({error}); asking on the terminal");
             terminal(request).await
@@ -45,7 +45,7 @@ pub async fn approve(request: &Request<'_>) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-async fn terminal(request: &Request<'_>) -> bool {
+async fn terminal(request: &Request<'_>) -> Option<bool> {
     use std::io::{BufRead, IsTerminal, Write};
     let prompt = format!("{}\n{}\n[y/N] ", request.question(), request.details());
     let answer = tokio::task::spawn_blocking(move || {
@@ -54,14 +54,18 @@ async fn terminal(request: &Request<'_>) -> bool {
         }
         let mut line = String::new();
         match std::io::stdin().lock().read_line(&mut line) {
-            Ok(0) | Err(_) => false,
-            Ok(_) => matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(matches!(
+                line.trim().to_ascii_lowercase().as_str(),
+                "y" | "yes"
+            )),
         }
     });
-    matches!(
-        tokio::time::timeout(APPROVAL_WINDOW, answer).await,
-        Ok(Ok(true))
-    )
+    match tokio::time::timeout(APPROVAL_WINDOW, answer).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(_)) => None,
+        Err(_) => Some(false),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -145,15 +149,15 @@ mod notification {
 }
 
 #[cfg(windows)]
-pub async fn approve(request: &Request<'_>) -> bool {
+pub async fn approve(request: &Request<'_>) -> Option<bool> {
     let (question, details) = (request.question(), request.details());
     match tokio::task::spawn_blocking(move || toast::ask(&question, &details)).await {
-        Ok(Ok(answer)) => answer,
+        Ok(Ok(answer)) => Some(answer),
         Ok(Err(error)) => {
             eprintln!("litzd: approval notification failed: {error}");
-            false
+            None
         }
-        Err(_) => false,
+        Err(_) => None,
     }
 }
 
@@ -166,8 +170,8 @@ mod toast {
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::Foundation::TypedEventHandler;
     use windows::UI::Notifications::{
-        ToastActivatedEventArgs, ToastDismissalReason, ToastDismissedEventArgs, ToastNotification,
-        ToastNotificationManager,
+        NotificationSetting, ToastActivatedEventArgs, ToastDismissalReason,
+        ToastDismissedEventArgs, ToastNotification, ToastNotificationManager,
     };
     use windows::Win32::Foundation::{CLASS_E_NOAGGREGATION, E_FAIL, E_POINTER};
     use windows::Win32::System::Com::{
@@ -318,6 +322,14 @@ mod toast {
             register()?;
             let _ = REGISTERED.set(());
         }
+        let notifier =
+            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from("LitzAudio"))?;
+        if notifier
+            .Setting()
+            .is_ok_and(|setting| setting != NotificationSetting::Enabled)
+        {
+            return Err(Error::new(E_FAIL, "notifications are turned off"));
+        }
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel();
         *PENDING.lock().unwrap() = Some((id, sender.clone()));
@@ -350,8 +362,6 @@ mod toast {
             let _ = sender.send(Err(E_FAIL.into()));
             Ok(())
         }))?;
-        let notifier =
-            ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from("LitzAudio"))?;
         notifier.Show(&toast)?;
         let answer = receiver.recv_timeout(APPROVAL_WINDOW);
         PENDING.lock().unwrap().take();

@@ -159,6 +159,7 @@ async fn pair(
                     match outcome {
                         PairOutcome::Declined => return Err("The computer declined the pairing request".into()),
                         PairOutcome::Full => return Err("The computer declined: all its pairing slots are in use".into()),
+                        PairOutcome::Unavailable => return Err("The computer could not show the pairing prompt. Turn on notifications for Litz Audio on the computer, then try again.".into()),
                         _ => {}
                     }
                     Ok::<PairOutcome, transport::Error>(outcome)
@@ -171,7 +172,7 @@ async fn pair(
     Ok(match outcome {
         PairOutcome::Accepted => serde_json::json!({"state":"accepted","certificate":desktop,"endpoint":address.to_string(),"fingerprint":actual}).to_string(),
         PairOutcome::Cancelled => serde_json::json!({"state":"cancelled"}).to_string(),
-        PairOutcome::Declined | PairOutcome::Full => {
+        PairOutcome::Declined | PairOutcome::Full | PairOutcome::Unavailable => {
             serde_json::json!({"state":"error","message":"The computer declined the pairing request"}).to_string()
         }
     })
@@ -261,6 +262,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(declined.to_string().contains("declined"));
+        let unavailable = manual_attempt(String::new(), PairOutcome::Unavailable)
+            .await
+            .unwrap_err();
+        assert!(unavailable.to_string().contains("Turn on notifications"));
         assert!(
             manual_attempt("0".repeat(64), PairOutcome::Accepted)
                 .await

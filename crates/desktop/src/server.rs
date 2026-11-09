@@ -358,14 +358,11 @@ async fn pair(
     if c.close_reason().is_some() {
         return Err("pairing cancelled".into());
     }
-    let outcome = if !allowed {
-        if replaces.is_some() {
-            PairOutcome::Full
-        } else {
-            PairOutcome::Declined
-        }
-    } else {
-        match hub
+    let outcome = match allowed {
+        None => PairOutcome::Unavailable,
+        Some(false) if replaces.is_some() => PairOutcome::Full,
+        Some(false) => PairOutcome::Declined,
+        Some(true) => match hub
             .approve(&cert, &name, replaces.map(|(cert, ..)| cert))
             .await
         {
@@ -374,7 +371,7 @@ async fn pair(
                 eprintln!("litzd: could not save approved phone “{name}”: {error}");
                 PairOutcome::Declined
             }
-        }
+        },
     };
     control
         .write(&Record::new(
