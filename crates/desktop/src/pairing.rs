@@ -17,6 +17,19 @@ struct Lease {
     generation: u64,
     owner: Option<Owner>,
 }
+impl Lease {
+    fn held_by(&self, connection: &quinn::Connection) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|o| o.connection.stable_id() == connection.stable_id())
+    }
+    /// Every change of owner starts a new generation, so a phone that read an
+    /// older one cannot take over by accident.
+    fn hand_to(&mut self, owner: Option<Owner>) -> Option<Owner> {
+        self.generation += 1;
+        std::mem::replace(&mut self.owner, owner)
+    }
+}
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -201,20 +214,16 @@ impl Hub {
             }
         }
         let mut lease = self.lease.lock().unwrap();
-        if lease.owner.as_ref().is_some_and(|o| o.certificate == cert) {
-            if let Some(owner) = lease.owner.take() {
-                owner
-                    .connection
-                    .close(0x21u32.into(), b"forgotten; pair again");
-            }
-            lease.generation += 1;
+        if lease.owner.as_ref().is_some_and(|o| o.certificate == cert)
+            && let Some(owner) = lease.hand_to(None)
+        {
+            owner
+                .connection
+                .close(0x21u32.into(), b"forgotten; pair again");
         }
     }
     fn state(lease: &Lease, connection: &quinn::Connection) -> Message {
-        let owned = lease
-            .owner
-            .as_ref()
-            .is_some_and(|o| o.connection.stable_id() == connection.stable_id());
+        let owned = lease.held_by(connection);
         let peer = transport::peer_certificate(connection).ok();
         let stale_self = !owned
             && lease
@@ -247,20 +256,9 @@ impl Hub {
             return Err("forgotten; pair again".into());
         }
         let mut lease = self.lease.lock().unwrap();
-        if lease
-            .owner
-            .as_ref()
-            .is_some_and(|o| o.connection.stable_id() == connection.stable_id())
-        {
-            return Ok(Self::state(&lease, connection));
-        }
-        if expected.is_some_and(|g| g != lease.generation)
-            || lease
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.certificate != cert)
-                && expected.is_none()
-        {
+        let stale = expected.is_some_and(|generation| generation != lease.generation);
+        let another_phone = lease.owner.as_ref().is_some_and(|o| o.certificate != cert);
+        if lease.held_by(connection) || stale || (another_phone && expected.is_none()) {
             return Ok(Self::state(&lease, connection));
         }
         let name = identity
@@ -270,30 +268,22 @@ impl Hub {
             .find(|p| p.certificate == cert)
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Phone".into());
-        if let Some(old) = lease.owner.take() {
-            old.connection
-                .close(0x20u32.into(), b"audio moved to another phone");
-        }
-        lease.generation = lease
-            .generation
-            .checked_add(1)
-            .ok_or("ownership generation exhausted")?;
-        lease.owner = Some(Owner {
+        let previous = lease.hand_to(Some(Owner {
             certificate: cert.to_vec(),
             name,
             connection: connection.clone(),
-        });
+        }));
+        if let Some(previous) = previous {
+            previous
+                .connection
+                .close(0x20u32.into(), b"audio moved to another phone");
+        }
         Ok(Self::state(&lease, connection))
     }
     pub fn release(&self, connection: &quinn::Connection) {
         let mut lease = self.lease.lock().unwrap();
-        if lease
-            .owner
-            .as_ref()
-            .is_some_and(|o| o.connection.stable_id() == connection.stable_id())
-        {
-            lease.owner = None;
-            lease.generation += 1;
+        if lease.held_by(connection) {
+            lease.hand_to(None);
         }
     }
 }
