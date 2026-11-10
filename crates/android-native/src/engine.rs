@@ -455,12 +455,17 @@ impl Connected {
                         }
                         return Err("desktop route became unavailable".into());
                     }
-                    if record.request_id != self.request { return Err("unexpected control response".into()); }
+                    if record.request_id != self.request {
+                        return Err("unexpected control response".into());
+                    }
                     if let Message::Status { revision, running } = &record.message {
-                        self.revision = *revision; self.running = *running;
+                        self.revision = *revision;
+                        self.running = *running;
                     }
                     if let Message::Ownership { generation, owner, owned } = &record.message {
-                        self.generation = *generation; self.owner = owner.clone(); self.owned = *owned;
+                        self.generation = *generation;
+                        self.owner = owner.clone();
+                        self.owned = *owned;
                     }
                     return Ok(record.message);
                 }
@@ -787,7 +792,7 @@ impl Connected {
                     .cloned()
                     .collect::<Vec<_>>()
                     .join("; ");
-                return Err(format!("no enabled direction could start: {details}").into());
+                return Err(Failure::Refused(details).into());
             }
             audio = Audio::open(mic, playback, desired.input, desired.output, source)?;
         }
@@ -870,7 +875,7 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
         Message::Status { .. } => {}
         Message::Error {
             code: Code::Unauthorized,
-        } => return Err("Unauthorized".into()),
+        } => return Err(Failure::Revoked.into()),
         Message::Error { code } => return Err(format!("desktop: {code:?}").into()),
         _ => return Err("invalid GetState response".into()),
     }
@@ -879,44 +884,14 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
     Ok(c)
 }
 
-fn status(
-    identity: &Identity,
-    desired: &Settings,
-    c: Option<&Connected>,
-    error: &Option<String>,
-    reconnecting: bool,
-    reconnect_allowed: bool,
-) -> String {
-    let audio = c.and_then(|c| c.media.audio.as_ref());
-    let listening = audio
-        .filter(|_| c.is_some_and(|c| c.media.listening.is_some()))
-        .map(Audio::listening);
-    serde_json::json!({
-        "state": if reconnecting {"Reconnecting"} else if audio.is_some() {"Streaming"} else if c.is_some() {"Authenticated"} else {"Idle"},
-        "reconnect_allowed": reconnect_allowed,
-        "desktop": identity.endpoint.to_string(), "enrolled": !identity.desktop.is_empty(),
-        "connected_endpoint": c.map(|connection| connection.media.connection.remote_address().to_string()),
-        "desired": desired, "running": c.map(|c| [c.media.encoder.is_some() && audio.is_some(), c.media.listening.is_some() && audio.is_some()]).unwrap_or([false,false]),
-        "revision": c.map(|c| c.revision), "direction_errors": c.map(|c| &c.direction_errors),
-        "owner":c.and_then(|c|c.owner.as_ref()), "ownership_generation":c.map(|c|c.generation), "owned":c.is_some_and(|c|c.owned),
-        "desktop_routes": c.and_then(|c| c.desktop.as_ref()),
-        "applied": c.map(|c| &c.media.settings),
-        "error": error,
-        "microphone_rms":c.map(|c| c.media.microphone_rms),
-        "audio":audio.map(Audio::info),
-        "underruns": audio.map(|a| a.info().output_xruns),
-        "callback_frames":audio.map(Audio::callback_frames),
-        "rtt_ms": c.map(|c| c.media.connection.rtt().as_secs_f64()*1000.0),
-        "jitter_ms":listening.as_ref().map(|l| l.buffer_ms), "late_packets": listening.as_ref().map(|l| l.late),
-        "concealed_frames":listening.as_ref().map(|l| l.concealed), "transport_drops":c.map(|c|c.media.dropped),
-    }).to_string()
-}
 #[derive(Debug, PartialEq)]
 enum Failure {
     Cancelled,
     ConnectTimeout,
     ControlTimeout,
     AudioDiscontinuity,
+    Revoked,
+    Refused(String),
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -925,19 +900,31 @@ impl std::fmt::Display for Failure {
             Self::ConnectTimeout => "Computer is unavailable. Check that Litz is running on it.",
             Self::ControlTimeout => "Desktop control timed out",
             Self::AudioDiscontinuity => "Audio interrupted; recovering",
+            Self::Revoked => "This computer no longer trusts this phone. Pair again.",
+            Self::Refused(details) => details,
         })
     }
 }
 impl std::error::Error for Failure {}
-fn retryable(mut error: &(dyn std::error::Error + 'static)) -> bool {
-    loop {
-        if let Some(connection) = error.downcast_ref::<quinn::ConnectionError>() {
-            return matches!(
-                connection,
-                quinn::ConnectionError::Reset | quinn::ConnectionError::TimedOut
-            ) || matches!(connection, quinn::ConnectionError::ApplicationClosed(close) if close.error_code == quinn::VarInt::from_u32(0));
+
+const FORGOTTEN: quinn::VarInt = quinn::VarInt::from_u32(0x21);
+const MOVED: quinn::VarInt = quinn::VarInt::from_u32(0x20);
+
+fn cause<'a, T: std::error::Error + 'static>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a T> {
+    std::iter::successors(Some(error), |e| e.source()).find_map(|e| e.downcast_ref())
+}
+fn retryable(error: &(dyn std::error::Error + 'static)) -> bool {
+    for e in std::iter::successors(Some(error), |e| e.source()) {
+        if let Some(connection) = e.downcast_ref::<quinn::ConnectionError>() {
+            return match connection {
+                quinn::ConnectionError::Reset | quinn::ConnectionError::TimedOut => true,
+                quinn::ConnectionError::ApplicationClosed(close) => close.error_code == 0u32.into(),
+                _ => false,
+            };
         }
-        if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+        let transient_io = e.downcast_ref::<std::io::Error>().is_some_and(|e| {
             matches!(
                 e.kind(),
                 std::io::ErrorKind::NetworkUnreachable
@@ -947,318 +934,560 @@ fn retryable(mut error: &(dyn std::error::Error + 'static)) -> bool {
                     | std::io::ErrorKind::NotConnected
                     | std::io::ErrorKind::TimedOut
             )
-        }) {
-            return true;
-        }
-        if error.is::<tokio::time::error::Elapsed>()
+        });
+        if transient_io
+            || e.is::<tokio::time::error::Elapsed>()
             || matches!(
-                error.downcast_ref::<Failure>(),
+                e.downcast_ref(),
                 Some(Failure::ControlTimeout | Failure::ConnectTimeout)
             )
         {
             return true;
         }
-        match error.source() {
-            Some(source) => error = source,
-            None => return false,
+    }
+    false
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Recovery {
+    Automatic,
+    Manual,
+    PairAgain,
+}
+impl Recovery {
+    fn after(error: &(dyn std::error::Error + 'static), retry_anyway: bool) -> Self {
+        let forgotten = match cause::<quinn::ConnectionError>(error) {
+            Some(quinn::ConnectionError::ApplicationClosed(close)) => close.error_code == FORGOTTEN,
+            _ => false,
+        };
+        if forgotten || cause::<Failure>(error) == Some(&Failure::Revoked) {
+            Self::PairAgain
+        } else if retry_anyway || retryable(error) {
+            Self::Automatic
+        } else {
+            Self::Manual
         }
     }
 }
+
+enum Event {
+    Cancelled,
+    Request(Option<Request>),
+    HandedOff(Result<Box<Connected>>),
+    Connection(Result<()>),
+    Tick,
+}
+
+struct Supervisor {
+    identity: Identity,
+    desired: Settings,
+    connected: Option<Box<Connected>>,
+    handoff: Option<(std::net::SocketAddr, Handoff)>,
+    error: Option<String>,
+    recovery: Recovery,
+    retry: Option<tokio::time::Instant>,
+    attempt: u32,
+    retry_auto_route: bool,
+    audio_recoveries: u32,
+    last_recovery: Instant,
+}
+
+impl Supervisor {
+    fn new(identity: Identity) -> Self {
+        Self {
+            identity,
+            desired: Settings::default(),
+            connected: None,
+            handoff: None,
+            error: None,
+            recovery: Recovery::Automatic,
+            retry: None,
+            attempt: 0,
+            retry_auto_route: false,
+            audio_recoveries: 0,
+            last_recovery: Instant::now(),
+        }
+    }
+
+    fn active(&self) -> bool {
+        self.desired.mic || self.desired.playback
+    }
+
+    fn stop_wanting_audio(&mut self) {
+        self.desired.mic = false;
+        self.desired.playback = false;
+        self.handoff = None;
+        self.retry = None;
+        self.retry_auto_route = false;
+    }
+
+    fn retry_soon(&mut self) {
+        self.attempt = 0;
+        self.retry = Some(tokio::time::Instant::now() + Duration::from_millis(500));
+    }
+
+    fn connected(&mut self, connection: Box<Connected>) {
+        self.connected = Some(connection);
+        self.error = None;
+        self.recovery = Recovery::Automatic;
+        self.retry = None;
+        self.retry_auto_route = false;
+        self.attempt = 0;
+    }
+
+    fn lost(&mut self, error: &transport::Error, retry_anyway: bool) {
+        self.recovery = Recovery::after(error.as_ref(), retry_anyway);
+        self.error = Some(error.to_string());
+        self.connected = None;
+        if self.recovery == Recovery::Automatic && self.desired.reconnect && self.active() {
+            self.retry_soon();
+        }
+    }
+
+    fn status(&self) -> String {
+        let c = self.connected.as_deref();
+        let audio = c.and_then(|c| c.media.audio.as_ref());
+        let listening = audio
+            .filter(|_| c.is_some_and(|c| c.media.listening.is_some()))
+            .map(Audio::listening);
+        let state = if self.retry.is_some() {
+            "Reconnecting"
+        } else if audio.is_some() {
+            "Streaming"
+        } else if c.is_some() {
+            "Authenticated"
+        } else {
+            "Idle"
+        };
+        serde_json::json!({
+            "state": state,
+            "reconnect_allowed": self.recovery == Recovery::Automatic,
+            "revoked": self.recovery == Recovery::PairAgain,
+            "desktop": self.identity.endpoint.to_string(),
+            "enrolled": !self.identity.desktop.is_empty(),
+            "connected_endpoint": c.map(|c| c.media.connection.remote_address().to_string()),
+            "desired": self.desired,
+            "running": c.map(|c| [c.media.encoder.is_some(), c.media.listening.is_some()].map(|r| r && audio.is_some())).unwrap_or_default(),
+            "revision": c.map(|c| c.revision),
+            "direction_errors": c.map(|c| &c.direction_errors),
+            "owner": c.and_then(|c| c.owner.as_ref()),
+            "ownership_generation": c.map(|c| c.generation),
+            "owned": c.is_some_and(|c| c.owned),
+            "desktop_routes": c.and_then(|c| c.desktop.as_ref()),
+            "applied": c.map(|c| &c.media.settings),
+            "error": self.error,
+            "microphone_rms": c.map(|c| c.media.microphone_rms),
+            "audio": audio.map(Audio::info),
+            "underruns": audio.map(|a| a.info().output_xruns),
+            "callback_frames": audio.map(Audio::callback_frames),
+            "rtt_ms": c.map(|c| c.media.connection.rtt().as_secs_f64() * 1000.0),
+            "jitter_ms": listening.as_ref().map(|l| l.buffer_ms),
+            "late_packets": listening.as_ref().map(|l| l.late),
+            "concealed_frames": listening.as_ref().map(|l| l.concealed),
+            "transport_drops": c.map(|c| c.media.dropped),
+        })
+        .to_string()
+    }
+
+    async fn next(
+        &mut self,
+        requests: &mut tokio::sync::mpsc::Receiver<Request>,
+        cancel: &tokio::sync::Notify,
+        health: &mut tokio::time::Interval,
+    ) -> Event {
+        let handoff = async {
+            match &mut self.handoff {
+                Some((_, connecting)) => connecting.await,
+                None => std::future::pending().await,
+            }
+        };
+        let connection = async {
+            match &mut self.connected {
+                Some(c) => c.event().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.notified() => Event::Cancelled,
+            request = requests.recv() => Event::Request(request),
+            result = handoff => Event::HandedOff(result),
+            result = connection => Event::Connection(result),
+            _ = health.tick() => Event::Tick,
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.stop_wanting_audio();
+        self.connected = None;
+        self.error = None;
+    }
+
+    fn shut_down(&mut self) {
+        self.cancel();
+        self.recovery = Recovery::Manual;
+    }
+
+    async fn command(&mut self, command: Command, cancel: &tokio::sync::Notify) {
+        match command {
+            Command::Status => {
+                if let Some(c) = self.connected.as_mut()
+                    && !c.owned
+                {
+                    self.error = c
+                        .rpc(Message::GetOwnership {})
+                        .await
+                        .err()
+                        .map(|e| e.to_string());
+                }
+            }
+            Command::Address { endpoint } => self.address(endpoint),
+            Command::RefreshRoutes => {
+                if let Some(c) = self.connected.as_mut() {
+                    self.error = c.refresh_routes().await.err().map(|e| e.to_string());
+                }
+            }
+            Command::Connect => {
+                self.error = None;
+                self.recovery = Recovery::Automatic;
+                if self.connected.is_none() {
+                    match connect(&self.identity).await {
+                        Ok(c) => self.connected(c),
+                        Err(e) => {
+                            self.recovery = Recovery::after(e.as_ref(), false);
+                            self.error = Some(e.to_string());
+                        }
+                    }
+                }
+            }
+            Command::Forget => {
+                self.stop_wanting_audio();
+                if let Some(c) = self.connected.as_mut() {
+                    let _ = c.rpc(Message::Unpair {}).await;
+                }
+                self.connected = None;
+                self.error = None;
+            }
+            Command::Disconnect => {
+                self.stop_wanting_audio();
+                self.connected = None;
+                self.error = None;
+            }
+            Command::Route {
+                expected_revision,
+                route,
+            } => {
+                let result = match self.connected.as_mut() {
+                    Some(c) => c.route(expected_revision, route, &self.desired).await,
+                    None => Err("Connect to the desktop first".into()),
+                };
+                self.settle(result);
+            }
+            Command::Voice {
+                expected_revision,
+                voice,
+            } => {
+                let result = match self.connected.as_mut() {
+                    Some(c) => c.voice(expected_revision, voice).await,
+                    None => Err("Connect to the computer first".into()),
+                };
+                self.settle(result);
+            }
+            Command::Stop => {
+                self.stop_wanting_audio();
+                self.error = None;
+                if let Some(c) = self.connected.as_mut()
+                    && let Err(e) = c.release().await
+                {
+                    self.error = Some(e.to_string());
+                    // A failed release must not keep ownership.
+                    self.connected = None;
+                }
+            }
+            Command::Set { settings } => self.set(settings, cancel).await,
+        }
+    }
+
+    fn address(&mut self, endpoint: std::net::SocketAddr) {
+        if endpoint.ip().is_unspecified() || endpoint.ip().is_multicast() || endpoint.port() < 1024
+        {
+            return;
+        }
+        self.identity.endpoint = endpoint;
+        if self
+            .handoff
+            .as_ref()
+            .is_some_and(|(target, _)| *target == endpoint)
+        {
+            return;
+        }
+        self.handoff = None;
+        let elsewhere = self
+            .connected
+            .as_ref()
+            .is_some_and(|c| c.media.connection.remote_address() != endpoint);
+        if !self.active() {
+            if elsewhere {
+                self.connected = None;
+            }
+        } else if elsewhere {
+            let candidate = self.identity.clone();
+            self.handoff = Some((endpoint, Box::pin(async move { connect(&candidate).await })));
+        } else if self.connected.is_none() {
+            self.attempt = 0;
+            self.retry = Some(tokio::time::Instant::now());
+        }
+    }
+
+    fn settle(&mut self, result: Result<Option<String>>) {
+        match result {
+            Ok(notice) => self.error = notice,
+            Err(e) => {
+                let discontinuity =
+                    cause::<Failure>(e.as_ref()) == Some(&Failure::AudioDiscontinuity);
+                self.lost(&e, discontinuity);
+            }
+        }
+    }
+
+    async fn set(&mut self, settings: Settings, cancel: &tokio::sync::Notify) {
+        let result = tokio::select! {
+            biased;
+            _ = cancel.notified() => Err(Failure::Cancelled.into()),
+            result = self.apply_settings(settings) => result,
+        };
+        self.desired.takeover = None;
+        let Err(e) = result else {
+            self.recovery = Recovery::Automatic;
+            return;
+        };
+        match cause::<Failure>(e.as_ref()) {
+            Some(Failure::Cancelled) => {
+                self.shut_down();
+                self.error = Some(e.to_string());
+            }
+            Some(Failure::Refused(_)) => {
+                self.stop_wanting_audio();
+                self.recovery = Recovery::Manual;
+                self.error = Some(e.to_string());
+                if let Some(c) = self.connected.as_mut()
+                    && c.release().await.is_err()
+                {
+                    self.connected = None;
+                }
+            }
+            _ if self.connected.as_ref().is_some_and(|c| !c.owned) => {
+                self.stop_wanting_audio();
+                self.recovery = Recovery::after(e.as_ref(), false);
+                self.error = Some(e.to_string());
+            }
+            _ => self.lost(&e, false),
+        }
+    }
+
+    async fn apply_settings(&mut self, settings: Settings) -> Result<()> {
+        settings.validate()?;
+        self.desired = settings;
+        self.retry = None;
+        self.retry_auto_route = false;
+        self.attempt = 0;
+        self.error = None;
+        if !self.active() {
+            self.handoff = None;
+            if let Some(c) = self.connected.as_mut() {
+                c.release().await?;
+                c.media.settings = self.desired.clone();
+            }
+            return Ok(());
+        }
+        if self
+            .connected
+            .as_ref()
+            .is_some_and(|c| c.media.connection.remote_address() != self.identity.endpoint)
+        {
+            self.connected = None;
+        }
+        if self.connected.is_none() {
+            self.connected = Some(connect(&self.identity).await?);
+        }
+        if let Some(c) = self.connected.as_mut() {
+            c.apply(&self.desired).await?;
+        }
+        Ok(())
+    }
+
+    async fn handed_off(&mut self, result: Result<Box<Connected>>) {
+        let Some((target, _)) = self.handoff.take() else {
+            return;
+        };
+        if target != self.identity.endpoint || !self.active() {
+            return;
+        }
+        let Ok(mut replacement) = result else {
+            return;
+        };
+        self.connected = None;
+        match replacement.apply(&self.desired).await {
+            Ok(()) => self.connected(replacement),
+            Err(e) => self.lost(&e, false),
+        }
+    }
+
+    async fn connection_failed(&mut self, error: transport::Error) {
+        if self.last_recovery.elapsed() > Duration::from_secs(10) {
+            self.audio_recoveries = 0;
+        }
+        let discontinuity = cause::<Failure>(error.as_ref()) == Some(&Failure::AudioDiscontinuity);
+        if discontinuity && self.audio_recoveries < 3 {
+            self.audio_recoveries += 1;
+            self.last_recovery = Instant::now();
+            if let Some(c) = self.connected.as_mut() {
+                c.media.clear();
+                if c.apply(&self.desired).await.is_ok() {
+                    self.error = None;
+                    return;
+                }
+            }
+        }
+        let closed = self
+            .connected
+            .as_ref()
+            .and_then(|c| c.media.connection.close_reason());
+        let close_code = match &closed {
+            Some(quinn::ConnectionError::ApplicationClosed(close)) => Some(close.error_code),
+            _ => None,
+        };
+        let deliberate = close_code == Some(MOVED) || close_code == Some(FORGOTTEN);
+        if deliberate {
+            self.stop_wanting_audio();
+        }
+        let network = !deliberate
+            && (discontinuity
+                || retryable(error.as_ref())
+                || closed.as_ref().is_some_and(|e| retryable(e)));
+        self.lost(&error, network);
+        if close_code == Some(FORGOTTEN) {
+            self.recovery = Recovery::PairAgain;
+        }
+        if close_code == Some(MOVED)
+            && let Ok(observer) = connect(&self.identity).await
+        {
+            self.connected = Some(observer);
+            self.error = None;
+        }
+    }
+
+    async fn tick(&mut self, cancel: &tokio::sync::Notify) {
+        self.check_audio_devices().await;
+        if self
+            .retry
+            .is_some_and(|at| at <= tokio::time::Instant::now())
+        {
+            self.reconnect(cancel).await;
+        }
+    }
+
+    async fn check_audio_devices(&mut self) {
+        let Some(c) = self.connected.as_mut() else {
+            return;
+        };
+        let Some(audio) = c.media.audio.as_ref().filter(|audio| audio.fault()) else {
+            return;
+        };
+        let faults = audio.info().error;
+        if faults == 0 {
+            return;
+        }
+        let (input, output) = (faults & 1 != 0, faults & 2 != 0);
+        if input && self.desired.input != 0 {
+            self.desired.mic = false;
+        }
+        if output && self.desired.output != 0 {
+            self.desired.playback = false;
+        }
+        match c.apply(&self.desired).await {
+            Ok(()) => {
+                self.recovery = Recovery::Automatic;
+                if input && self.desired.input != 0 {
+                    c.direction_errors[0] =
+                        Some("Input route disconnected; select and start again".into());
+                }
+                if output && self.desired.output != 0 {
+                    c.direction_errors[1] =
+                        Some("Output route disconnected; select and start again".into());
+                }
+            }
+            Err(e) => {
+                self.retry_auto_route = (input && self.desired.mic && self.desired.input == 0)
+                    || (output && self.desired.playback && self.desired.output == 0);
+                let retry_auto_route = self.retry_auto_route;
+                self.lost(&e, retry_auto_route);
+            }
+        }
+    }
+
+    async fn reconnect(&mut self, cancel: &tokio::sync::Notify) {
+        let attempt = async {
+            let mut c = connect(&self.identity).await?;
+            c.apply(&self.desired).await?;
+            Ok::<_, transport::Error>(c)
+        };
+        let result = tokio::select! {
+            biased;
+            _ = cancel.notified() => Err(Failure::Cancelled.into()),
+            result = attempt => result,
+        };
+        let e = match result {
+            Ok(c) => return self.connected(c),
+            Err(e) => e,
+        };
+        if cause::<Failure>(e.as_ref()) == Some(&Failure::Cancelled) {
+            self.stop_wanting_audio();
+            return;
+        }
+        self.error = Some(e.to_string());
+        self.recovery = Recovery::after(e.as_ref(), self.retry_auto_route);
+        if self.recovery != Recovery::Automatic {
+            self.retry = None;
+            return;
+        }
+        self.attempt = (self.attempt + 1).min(5);
+        let mut random = [0u8; 2];
+        let _ = getrandom::fill(&mut random);
+        let backoff =
+            (500u64 << self.attempt).min(15000) + u64::from(u16::from_ne_bytes(random)) % 250;
+        self.retry = Some(tokio::time::Instant::now() + Duration::from_millis(backoff));
+    }
+}
+
 async fn run(
-    mut identity: Identity,
+    identity: Identity,
     mut requests: tokio::sync::mpsc::Receiver<Request>,
     cancel: Arc<tokio::sync::Notify>,
     cancelled: Arc<AtomicBool>,
 ) {
-    let mut desired = Settings::default();
-    let mut connected: Option<Box<Connected>> = None;
-    let mut handoff: Option<Handoff> = None;
-    let mut handoff_target = None;
-    let mut error = None;
-    let mut reconnect_allowed = true;
-    let mut retry: Option<tokio::time::Instant> = None;
-    let mut attempt = 0u32;
-    let mut audio_recoveries = 0u32;
-    let mut retry_auto_route = false;
-    let mut last_recovery = Instant::now();
+    let mut supervisor = Supervisor::new(identity);
     let mut health = tokio::time::interval(Duration::from_millis(500));
     loop {
-        tokio::select! {
-            biased;
-            _ = cancel.notified() => {
-                desired.mic = false; desired.playback = false;
-                handoff = None; handoff_target = None;
-                connected.take(); retry = None; retry_auto_route = false; error = None;
+        match supervisor.next(&mut requests, &cancel, &mut health).await {
+            Event::Cancelled => supervisor.cancel(),
+            Event::Request(None) => break,
+            Event::Request(Some(request)) => {
+                if matches!(request.command, Command::Set { .. })
+                    && cancelled.load(Ordering::Acquire)
+                {
+                    supervisor.shut_down();
+                } else {
+                    supervisor.command(request.command, &cancel).await;
+                }
+                let _ = request.reply.send(supervisor.status());
             }
-            request = requests.recv() => {
-                let Some(request) = request else { break; };
-                if matches!(request.command, Command::Set { .. }) && cancelled.load(Ordering::Acquire) {
-                    desired.mic = false; desired.playback = false; connected.take(); retry = None;
-                    let _ = request.reply.send(status(&identity, &desired, None, &None, false, false));
-                    continue;
-                }
-                match request.command {
-                    Command::Status => {
-                        if let Some(c) = connected.as_mut() && !c.owned {
-                            error = c.rpc(Message::GetOwnership {}).await.err().map(|e| e.to_string());
-                        }
-                    },
-                    Command::Address { endpoint } => {
-                        if !endpoint.ip().is_unspecified() && !endpoint.ip().is_multicast() && endpoint.port() >= 1024 {
-                            identity.endpoint = endpoint;
-                            if handoff_target != Some(endpoint) {
-                                handoff = None;
-                                handoff_target = None;
-                                if desired.mic || desired.playback {
-                                    if connected.as_ref().is_some_and(|c| c.media.connection.remote_address() != endpoint) {
-                                        let candidate = identity.clone();
-                                        handoff_target = Some(endpoint);
-                                        handoff = Some(Box::pin(async move { connect(&candidate).await }));
-                                    } else if connected.is_none() {
-                                        attempt = 0;
-                                        retry = Some(tokio::time::Instant::now());
-                                    }
-                                } else if connected.as_ref().is_some_and(|c| c.media.connection.remote_address() != endpoint) {
-                                    connected.take();
-                                }
-                            }
-                        }
-                    },
-                    Command::RefreshRoutes => {
-                        if let Some(c) = connected.as_mut() {
-                            error = c.refresh_routes().await.err().map(|e| e.to_string());
-                        }
-                    },
-                    Command::Connect => {
-                        error = None;
-                        reconnect_allowed = true;
-                        if connected.is_none() {
-                            match connect(&identity).await {
-                                Ok(c) => connected = Some(c),
-                                Err(e) => { reconnect_allowed = retryable(e.as_ref()); error = Some(e.to_string()); },
-                            }
-                        }
-                    },
-                    Command::Forget => {
-                        handoff = None; handoff_target = None;
-                        desired.mic = false; desired.playback = false; retry = None; retry_auto_route = false;
-                        if let Some(c) = connected.as_mut() { let _ = c.rpc(Message::Unpair {}).await; }
-                        connected.take(); error = None;
-                    },
-                    Command::Disconnect => {
-                        handoff = None; handoff_target = None;
-                        desired.mic = false; desired.playback = false; retry = None; retry_auto_route = false;
-                        connected.take(); error = None;
-                    },
-                    Command::Route { expected_revision, route } => {
-                        let result = match connected.as_mut() {
-                            Some(c) => c.route(expected_revision, route, &desired).await,
-                            None => Err("Connect to the desktop first".into()),
-                        };
-                        match result {
-                            Ok(reason) => error = reason,
-                            Err(failure) => {
-                                reconnect_allowed = retryable(failure.as_ref()) || failure.downcast_ref::<Failure>() == Some(&Failure::AudioDiscontinuity);
-                                error = Some(failure.to_string()); connected.take();
-                                retry = (reconnect_allowed && desired.reconnect && (desired.mic || desired.playback))
-                                    .then(|| tokio::time::Instant::now() + Duration::from_millis(500));
-                            }
-                        }
-                    },
-                    Command::Voice { expected_revision, voice } => {
-                        let result = match connected.as_mut() {
-                            Some(c) => c.voice(expected_revision, voice).await,
-                            None => Err("Connect to the computer first".into()),
-                        };
-                        match result {
-                            Ok(reason) => error = reason,
-                            Err(failure) => {
-                                reconnect_allowed = retryable(failure.as_ref()) || failure.downcast_ref::<Failure>() == Some(&Failure::AudioDiscontinuity);
-                                error = Some(failure.to_string()); connected.take();
-                                retry = (reconnect_allowed && desired.reconnect && (desired.mic || desired.playback))
-                                    .then(|| tokio::time::Instant::now() + Duration::from_millis(500));
-                            }
-                        }
-                    },
-                    Command::Stop => {
-                        handoff = None; handoff_target = None;
-                        desired.mic = false; desired.playback = false; retry = None; retry_auto_route = false;
-                        error = None;
-                        if let Some(c) = connected.as_mut() && let Err(failure) = c.release().await {
-                            error = Some(failure.to_string());
-                            connected.take(); // a failed release must not retain ownership
-                        }
-                    }
-                    Command::Set { settings } => {
-                        let operation = async {
-                            settings.validate()?;
-                            desired = settings;
-                            retry = None; retry_auto_route = false; attempt = 0; error = None;
-                            if !desired.mic && !desired.playback {
-                                handoff = None; handoff_target = None;
-                                if let Some(c) = connected.as_mut() { c.release().await?; c.media.settings = desired.clone(); }
-                                return Ok(());
-                            }
-                            if connected.as_ref().is_some_and(|c| c.media.connection.remote_address() != identity.endpoint) {
-                                connected.take();
-                            }
-                            if connected.is_none() {
-                                connected = Some(connect(&identity).await?);
-                            }
-                            if let Some(connection) = connected.as_mut() {
-                                connection.apply(&desired).await?;
-                            }
-                            Ok(())
-                        };
-                        let result = tokio::select! {
-                            biased;
-                            _ = cancel.notified() => Err(Failure::Cancelled.into()),
-                            result = operation => result,
-                        };
-                        if result.as_ref().is_err_and(|e: &transport::Error|e.downcast_ref::<Failure>() == Some(&Failure::Cancelled)) {
-                            desired.mic = false; desired.playback = false;
-                        }
-                        desired.takeover = None;
-                        if let Err(e) = result {
-                            reconnect_allowed = retryable(e.as_ref());
-                            error = Some(e.to_string());
-                            if connected.as_ref().is_some_and(|c| !c.owned) {
-                                desired.mic = false; desired.playback = false;
-                            } else { connected.take(); }
-                            if desired.reconnect
-                                && (desired.mic || desired.playback)
-                                && retryable(e.as_ref())
-                            {
-                                attempt = 0;
-                                retry = Some(tokio::time::Instant::now() + Duration::from_millis(500));
-                            }
-                        }
-                    }
-                }
-                let _ = request.reply.send(status(&identity, &desired, connected.as_deref(), &error, retry.is_some(), reconnect_allowed));
-            }
-            result = async { handoff.as_mut().unwrap().await }, if handoff.is_some() => {
-                handoff = None;
-                let target = handoff_target.take();
-                if target != Some(identity.endpoint) || !(desired.mic || desired.playback) {
-                    continue;
-                }
-                if let Ok(mut replacement) = result {
-                    connected.take();
-                    match replacement.apply(&desired).await {
-                        Ok(()) => {
-                            connected = Some(replacement);
-                            error = None; retry = None; attempt = 0; reconnect_allowed = true;
-                        }
-                        Err(failure) => {
-                            reconnect_allowed = retryable(failure.as_ref());
-                            error = Some(failure.to_string());
-                            retry = (reconnect_allowed && desired.reconnect)
-                                .then(|| tokio::time::Instant::now() + Duration::from_millis(500));
-                        }
-                    }
-                }
-            }
-            result = async { connected.as_mut().unwrap().event().await }, if connected.is_some() => {
-                if let Err(e) = result {
-                    if last_recovery.elapsed() > Duration::from_secs(10) { audio_recoveries = 0; }
-                    if e.downcast_ref::<Failure>() == Some(&Failure::AudioDiscontinuity) && audio_recoveries < 3 {
-                        audio_recoveries += 1;
-                        last_recovery = Instant::now();
-                        if let Some(connection) = connected.as_mut() {
-                            connection.media.clear();
-                            if connection.apply(&desired).await.is_ok() {
-                                error = None;
-                                continue;
-                            }
-                        }
-                    }
-                    let close_code = connected.as_ref().and_then(|c| match c.media.connection.close_reason() {
-                        Some(quinn::ConnectionError::ApplicationClosed(close)) => Some(close.error_code),
-                        _ => None,
-                    });
-                    let moved = close_code == Some(quinn::VarInt::from_u32(0x20));
-                    let deliberate = moved || close_code == Some(quinn::VarInt::from_u32(0x21));
-                    if deliberate { desired.mic = false; desired.playback = false; retry = None; }
-                    let network_failure = !deliberate && (retryable(e.as_ref())
-                        || e.downcast_ref::<Failure>() == Some(&Failure::AudioDiscontinuity)
-                        || connected.as_ref().and_then(|c|c.media.connection.close_reason()).is_some_and(|e| retryable(&e)));
-                    reconnect_allowed = network_failure;
-                    error = Some(e.to_string()); connected.take();
-                    if moved && let Ok(observer) = connect(&identity).await {
-                        connected = Some(observer);
-                        error = None;
-                    }
-                    if network_failure && desired.reconnect && (desired.mic || desired.playback) {
-                        attempt = 0;
-                        retry = Some(tokio::time::Instant::now() + Duration::from_millis(500));
-                    }
-                }
-            }
-            _ = health.tick() => {
-                if connected.as_ref().is_some_and(|c| c.media.audio.as_ref().is_some_and(Audio::fault)) {
-                    reconnect_allowed = false;
-                    let c = connected.as_mut().unwrap();
-                    let faults = c.media.audio.as_ref().map(|a| a.info().error).unwrap_or(3);
-                    if faults == 0 {
-                        continue;
-                    } else {
-                        if faults & 1 != 0 && desired.input != 0 { desired.mic = false; }
-                        if faults & 2 != 0 && desired.output != 0 { desired.playback = false; }
-                        match c.apply(&desired).await {
-                            Ok(()) => {
-                                reconnect_allowed = true;
-                                if faults & 1 != 0 && desired.input != 0 { c.direction_errors[0] = Some("Input route disconnected; select and start again".into()); }
-                                if faults & 2 != 0 && desired.output != 0 { c.direction_errors[1] = Some("Output route disconnected; select and start again".into()); }
-                            }
-                            Err(e) => {
-                                error = Some(e.to_string());
-                                connected.take();
-                                retry_auto_route = (faults & 1 != 0 && desired.mic && desired.input == 0)
-                                    || (faults & 2 != 0 && desired.playback && desired.output == 0);
-                                reconnect_allowed = retry_auto_route || retryable(e.as_ref());
-                                if desired.reconnect
-                                    && (desired.mic || desired.playback)
-                                    && reconnect_allowed
-                                {
-                                    attempt = 0;
-                                    retry = Some(tokio::time::Instant::now() + Duration::from_millis(500));
-                                }
-                            }
-                        }
-                    }
-                }
-                if retry.is_some_and(|at| at <= tokio::time::Instant::now()) {
-                    let operation = async {
-                        let mut c = connect(&identity).await?;
-                        c.apply(&desired).await?;
-                        Ok::<_, transport::Error>(c)
-                    };
-                    let result = tokio::select! {
-                        biased;
-                        _ = cancel.notified() => Err(Failure::Cancelled.into()),
-                        result = operation => result,
-                    };
-                    match result {
-                        Ok(c) => { connected = Some(c); error = None; retry = None; retry_auto_route = false; attempt = 0; reconnect_allowed = true; }
-                        Err(e) => {
-                            if e.downcast_ref::<Failure>() == Some(&Failure::Cancelled) {
-                                desired.mic = false; desired.playback = false; retry = None; continue;
-                            }
-                            error = Some(e.to_string()); attempt = (attempt + 1).min(5);
-                            if !retry_auto_route && !retryable(e.as_ref()) {
-                                retry = None;
-                                continue;
-                            }
-                            let mut random = [0u8;2]; let _ = getrandom::fill(&mut random);
-                            retry = Some(tokio::time::Instant::now() + Duration::from_millis((500u64 << attempt).min(15000) + u16::from_ne_bytes(random) as u64 % 250));
-                        }
-                    }
-                }
-            }
+            Event::HandedOff(result) => supervisor.handed_off(result).await,
+            Event::Connection(Ok(())) => {}
+            Event::Connection(Err(error)) => supervisor.connection_failed(error).await,
+            Event::Tick => supervisor.tick(&cancel).await,
         }
     }
-    drop(connected);
 }
 
 #[cfg(test)]
@@ -1462,6 +1691,32 @@ mod tests {
             .await
             .unwrap_err();
         assert!(retryable(&elapsed));
+    }
+    #[test]
+    fn only_the_computer_forgetting_the_phone_requires_pairing_again() {
+        let closed = |code| {
+            quinn::ReadError::ConnectionLost(quinn::ConnectionError::ApplicationClosed(
+                quinn::ApplicationClose {
+                    error_code: quinn::VarInt::from_u32(code),
+                    reason: b"".as_slice().into(),
+                },
+            ))
+        };
+        assert_eq!(
+            Recovery::after(&Failure::Revoked, false),
+            Recovery::PairAgain
+        );
+        assert_eq!(Recovery::after(&closed(0x21), true), Recovery::PairAgain);
+        assert_eq!(Recovery::after(&closed(0), false), Recovery::Automatic);
+        for code in [1, 0x20, 0x22] {
+            assert_eq!(Recovery::after(&closed(code), false), Recovery::Manual);
+        }
+        let refused = Failure::Refused("desktop: RouteConflict".into());
+        assert_eq!(Recovery::after(&refused, false), Recovery::Manual);
+        assert_eq!(
+            Recovery::after(&quinn::ConnectionError::TimedOut, false),
+            Recovery::Automatic
+        );
     }
     #[test]
     fn handoff_or_revocation_is_never_a_transport_retry() {

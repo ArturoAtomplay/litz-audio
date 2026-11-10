@@ -227,7 +227,7 @@ private fun ComputerCard(
         }
     val (line, color) =
         when {
-            !status.reconnectAllowed && !status.connected ->
+            status.revoked && !status.connected ->
                 "This computer no longer trusts this phone" to MaterialTheme.colorScheme.error
             status.inUse -> "In use by ${status.owner}" to MaterialTheme.colorScheme.tertiary
             status.connected ->
@@ -293,7 +293,7 @@ private fun ComputerCard(
             if (!status.connected && !connecting) {
                 Text(
                     when {
-                        !status.reconnectAllowed -> "Pair again to use it with this phone."
+                        status.revoked -> "Pair again to use it with this phone."
                         nearby != null ->
                             "Make sure your computer's firewall allows Litz on UDP port 47165."
                         else -> "Litz connects on its own when ${computer.name} is on."
@@ -303,7 +303,7 @@ private fun ComputerCard(
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
                 Row(Modifier.padding(top = 12.dp)) {
-                    if (!status.reconnectAllowed)
+                    if (status.revoked)
                         nearby?.let {
                             Button(onClick = { pairAgain(it) }, enabled = !busy) {
                                 Text("Pair again")

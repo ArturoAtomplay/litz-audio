@@ -11,6 +11,7 @@ internal class Snapshot(status: SessionStatus) {
     val connected = state == "Authenticated" || state == "Streaming"
     val endpoint = json.optString("connected_endpoint").takeUnless { it.isBlank() || it == "null" }
     val reconnectAllowed = json.optBoolean("reconnect_allowed", true)
+    val revoked = json.optBoolean("revoked")
     val owner = json.optString("owner").takeUnless { it.isBlank() || it == "null" }
     val generation = json.optLong("ownership_generation")
     val owned = json.optBoolean("owned")
