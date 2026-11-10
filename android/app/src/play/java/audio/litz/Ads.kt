@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -145,7 +146,7 @@ internal fun StoreOptions() {
     val activity = LocalActivity.current
     if (!required || activity == null) return
     SettingRow(
-        "Ad privacy choices",
+        stringResource(R.string.ad_privacy_choices),
         onClick = { UserMessagingPlatform.showPrivacyOptionsForm(activity) {} },
     )
 }

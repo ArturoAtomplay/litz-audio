@@ -1,0 +1,4 @@
+[bindings.kotlin]
+package_name = "audio.litz.native"
+android = true
+generate_immutable_records = true

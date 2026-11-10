@@ -14,6 +14,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import audio.litz.native.Settings
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,7 +44,7 @@ class MainActivity : ComponentActivity() {
                         ActivityResultContracts.RequestPermission()
                     ) { granted ->
                         if (granted) vm.startDiscovery()
-                        else vm.message("Allow local network access to find nearby computers.")
+                        else vm.message(UiText(R.string.message_local_network_needed))
                     }
                 LaunchedEffect(Unit) {
                     if (
@@ -70,10 +71,7 @@ class MainActivity : ComponentActivity() {
                                     PackageManager.PERMISSION_GRANTED
                         if (lan && mic) {
                             if (connectPending) vm.connect() else next?.let(vm::startAuthorized)
-                        } else
-                            vm.message(
-                                "Permission denied. Allow local network access and, for microphone mode, microphone access in Android settings, then try again."
-                            )
+                        } else vm.message(UiText(R.string.message_permission_denied))
                         connectPending = false
                     }
                 fun authorize(settings: Settings?) {

@@ -23,7 +23,7 @@ class NearbyDiscoveryTest {
     private val nsd =
         Shadow.extract<ShadowNsdManager>(context.getSystemService(NsdManager::class.java))
     private var computers = emptyList<NearbyComputer>()
-    private val errors = mutableListOf<String>()
+    private val errors = mutableListOf<UiText>()
     private val discovery = NearbyDiscovery(context, failed = { errors += it }) { computers = it }
 
     private fun drain() = shadowOf(Looper.getMainLooper()).idle()
@@ -74,7 +74,7 @@ class NearbyDiscoveryTest {
         drain()
         val stale = resolver(first)
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5))
-        assertTrue(errors.any { it.contains("timed out") })
+        assertTrue(errors.any { it.id == R.string.address_timed_out })
         stale.onResolveFailed(first, 3)
         drain()
         resolver(second).onServiceResolved(second)

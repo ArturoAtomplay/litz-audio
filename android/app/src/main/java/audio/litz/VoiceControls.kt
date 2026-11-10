@@ -6,48 +6,53 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import audio.litz.native.InputSensitivity
+import audio.litz.native.Suppression
+import audio.litz.native.VoiceSettings
 import kotlin.math.log10
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
-import org.json.JSONArray
-import org.json.JSONObject
 
 @Immutable
 internal data class VoicePreferences(
-    val suppression: String = "none",
+    val suppression: Suppression = Suppression.NONE,
     val level: Boolean = false,
     val eq: List<Int> = listOf(0, 0, 0),
     val sensitivity: String = "off",
     val threshold: Int = -40,
 ) {
-    fun json(): JSONObject =
-        JSONObject()
-            .put("suppression", suppression)
-            .put("auto_level", level)
-            .put("eq_db", JSONArray(eq))
-            .apply {
+    fun toSettings(): VoiceSettings =
+        VoiceSettings(
+            suppression = suppression,
+            autoLevel = level,
+            eqDb = eq.map { it.toByte() },
+            inputSensitivity =
                 when (sensitivity) {
-                    "automatic" -> put("input_sensitivity", "automatic")
-                    "manual" -> put("input_sensitivity", JSONObject().put("manual", threshold))
-                }
-            }
+                    "automatic" -> InputSensitivity.Automatic
+                    "manual" -> InputSensitivity.Manual(threshold.toByte())
+                    else -> InputSensitivity.Off
+                },
+        )
 
     companion object {
-        fun from(json: JSONObject) =
+        fun from(settings: VoiceSettings) =
             VoicePreferences(
-                json.optString("suppression", "none"),
-                json.optBoolean("auto_level"),
-                List(3) { json.optJSONArray("eq_db")?.optInt(it)?.coerceIn(-12, 12) ?: 0 },
-                when (val value = json.opt("input_sensitivity")) {
-                    "automatic" -> "automatic"
-                    is JSONObject -> "manual"
-                    else -> "off"
+                settings.suppression,
+                settings.autoLevel,
+                settings.eqDb.map { it.toInt().coerceIn(-12, 12) },
+                when (settings.inputSensitivity) {
+                    is InputSensitivity.Automatic -> "automatic"
+                    is InputSensitivity.Manual -> "manual"
+                    is InputSensitivity.Off -> "off"
                 },
-                json.optJSONObject("input_sensitivity")?.optInt("manual", -40)?.coerceIn(-60, -20)
-                    ?: -40,
+                (settings.inputSensitivity as? InputSensitivity.Manual)
+                    ?.v1
+                    ?.toInt()
+                    ?.coerceIn(-60, -20) ?: -40,
             )
     }
 }
@@ -88,13 +93,13 @@ internal fun rebaseVoiceDraft(
 @Composable
 internal fun VoiceControls(
     computer: String?,
-    revision: Long,
+    revision: ULong,
     saved: VoicePreferences,
     enabled: Boolean,
-    supported: List<String> = listOf("none", "rnnoise", "deep_filter_net"),
-    failure: String? = null,
-    inputRms: Double? = null,
-    apply: (Long, JSONObject) -> Unit,
+    supported: List<Suppression> = Suppression.entries,
+    failure: UiText? = null,
+    inputRms: Float? = null,
+    apply: (ULong, VoiceSettings) -> Unit,
 ) {
     val actual = saved
     var draft by remember(computer) { mutableStateOf(actual) }
@@ -122,53 +127,61 @@ internal fun VoiceControls(
     fun send(next: VoicePreferences) {
         dirty = dirty + voiceChangedFields(draft, next)
         draft = next
-        latestApply(latestRevision, next.json())
+        latestApply(latestRevision, next.toSettings())
     }
     LaunchedEffect(draft, sliderPending) {
         if (sliderPending && enabled) {
             delay(100)
-            latestApply(latestRevision, draft.json())
+            latestApply(latestRevision, draft.toSettings())
         }
     }
     val algorithms =
         listOf(
-                Triple("none", "Off", null),
+                Triple(Suppression.NONE, stringResource(R.string.noise_suppression_off), null),
                 Triple(
-                    "rnnoise",
+                    Suppression.RNNOISE,
                     "RNNoise",
-                    "Light: removes steady background noise with little effect on your voice",
+                    stringResource(R.string.noise_suppression_rnnoise_description),
                 ),
                 Triple(
-                    "deep_filter_net",
+                    Suppression.DEEP_FILTER_NET,
                     "DeepFilterNet",
-                    "Strong: removes more noise, but heavy noise may change how you sound",
+                    stringResource(R.string.noise_suppression_deep_filter_description),
                 ),
             )
             .filter { it.first in supported }
+    val thresholdLabel = stringResource(R.string.voice_threshold)
+    val bands =
+        listOf(
+            stringResource(R.string.equalizer_low),
+            stringResource(R.string.equalizer_mid),
+            stringResource(R.string.equalizer_high),
+        )
     var suppressionSheet by remember { mutableStateOf(false) }
     var sensitivitySheet by remember { mutableStateOf(false) }
     OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(vertical = 6.dp)) {
             SettingRow(
-                "Noise suppression",
-                algorithms.firstOrNull { it.first == draft.suppression }?.second ?: "Unavailable",
+                stringResource(R.string.noise_suppression),
+                algorithms.firstOrNull { it.first == draft.suppression }?.second
+                    ?: stringResource(R.string.unavailable),
                 enabled = enabled,
                 onClick = { suppressionSheet = true },
             )
             SettingRow(
-                "Automatic level",
-                "Keeps your voice at a steady volume",
+                stringResource(R.string.automatic_level),
+                stringResource(R.string.automatic_level_description),
                 enabled = enabled,
                 onClick = { send(draft.copy(level = !draft.level)) },
             ) {
                 Switch(checked = draft.level, onCheckedChange = null, enabled = enabled)
             }
             SettingRow(
-                "Input sensitivity",
+                stringResource(R.string.input_sensitivity),
                 when (draft.sensitivity) {
-                    "automatic" -> "Automatic"
-                    "manual" -> "Manual · ${draft.threshold} dBFS"
-                    else -> "Off"
+                    "automatic" -> stringResource(R.string.sensitivity_automatic)
+                    "manual" -> stringResource(R.string.sensitivity_manual_value, draft.threshold)
+                    else -> stringResource(R.string.sensitivity_off)
                 },
                 enabled = enabled,
                 onClick = { sensitivitySheet = true },
@@ -190,28 +203,28 @@ internal fun VoiceControls(
                         steps = 39,
                         enabled = enabled,
                         colors = quietSliderColors(),
-                        modifier = Modifier.semantics { contentDescription = "Voice threshold" },
+                        modifier = Modifier.semantics { contentDescription = thresholdLabel },
                     )
                     Text(
-                        "Lower picks up quieter speech. Higher blocks more background sound.",
+                        stringResource(R.string.voice_threshold_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             inputRms?.let { rms ->
-                val db = (20.0 * log10(rms.coerceAtLeast(0.000001))).coerceIn(-60.0, 0.0)
+                val db = (20.0 * log10(rms.toDouble().coerceAtLeast(0.000001))).coerceIn(-60.0, 0.0)
                 Column(
                     Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Row {
                         Text(
-                            "Input level",
+                            stringResource(R.string.input_level),
                             Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyLarge,
                         )
                         Text(
-                            "${db.roundToInt()} dBFS",
+                            stringResource(R.string.decibels_full_scale, db.roundToInt()),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -224,11 +237,11 @@ internal fun VoiceControls(
             }
             HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
             Text(
-                "Equalizer",
+                stringResource(R.string.equalizer),
                 Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodyLarge,
             )
-            listOf("Low", "Mid", "High").forEachIndexed { index, label ->
+            bands.forEachIndexed { index, label ->
                 Column(Modifier.padding(horizontal = 20.dp)) {
                     Row(Modifier.fillMaxWidth()) {
                         Text(
@@ -238,7 +251,10 @@ internal fun VoiceControls(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "${if (draft.eq[index] > 0) "+" else ""}${draft.eq[index]} dB",
+                            stringResource(
+                                R.string.decibels,
+                                "${if (draft.eq[index] > 0) "+" else ""}${draft.eq[index]}",
+                            ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -271,7 +287,10 @@ internal fun VoiceControls(
         }
     }
     if (suppressionSheet)
-        AudioChoiceSheet("Noise suppression", dismiss = { suppressionSheet = false }) {
+        AudioChoiceSheet(
+            stringResource(R.string.noise_suppression),
+            dismiss = { suppressionSheet = false },
+        ) {
             algorithms.forEach { (value, label, description) ->
                 AudioChoiceRow(
                     label,
@@ -285,11 +304,26 @@ internal fun VoiceControls(
             }
         }
     if (sensitivitySheet)
-        AudioChoiceSheet("Input sensitivity", dismiss = { sensitivitySheet = false }) {
+        AudioChoiceSheet(
+            stringResource(R.string.input_sensitivity),
+            dismiss = { sensitivitySheet = false },
+        ) {
             listOf(
-                    Triple("off", "Off", "Always send your microphone"),
-                    Triple("automatic", "Automatic", "Mutes background sound between words"),
-                    Triple("manual", "Manual", "Choose the level that counts as speech"),
+                    Triple(
+                        "off",
+                        stringResource(R.string.sensitivity_off),
+                        stringResource(R.string.sensitivity_off_description),
+                    ),
+                    Triple(
+                        "automatic",
+                        stringResource(R.string.sensitivity_automatic),
+                        stringResource(R.string.sensitivity_automatic_description),
+                    ),
+                    Triple(
+                        "manual",
+                        stringResource(R.string.sensitivity_manual),
+                        stringResource(R.string.sensitivity_manual_description),
+                    ),
                 )
                 .forEach { (value, label, description) ->
                     AudioChoiceRow(

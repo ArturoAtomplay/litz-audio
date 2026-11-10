@@ -71,7 +71,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             ndk { debugSymbolLevel = "SYMBOL_TABLE" }
             externalNativeBuild {
                 cmake {
@@ -101,9 +101,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("com.google.oboe:oboe:1.11.0")
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
     "playImplementation"("com.google.android.gms:play-services-ads:25.5.0")
     "playImplementation"("com.google.android.ump:user-messaging-platform:4.0.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("net.java.dev.jna:jna:5.19.1")
     testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
@@ -205,6 +207,93 @@ fun registerRustTask(name: String, release: Boolean) = tasks.register<BuildRust>
 val rustDebug = registerRustTask("buildRustDebug", false)
 val rustRelease = registerRustTask("buildRustRelease", true)
 
+fun hostEnvironment() = providers.provider {
+    buildMap {
+        providers.environmentVariable("PATH").orElse(providers.environmentVariable("Path")).orNull
+            ?.let { put("PATH", it) }
+        providers.environmentVariable("RUSTUP_TOOLCHAIN").orNull?.let { put("RUSTUP_TOOLCHAIN", it) }
+    }
+}
+
+abstract class GenerateBindings : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE)
+    abstract val library: ConfigurableFileCollection
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val generatorInputs: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
+    @get:Internal abstract val repository: DirectoryProperty
+    @get:LocalState abstract val targetDirectory: DirectoryProperty
+    @get:Input abstract val toolEnvironment: MapProperty<String, String>
+    @get:Inject abstract val exec: ExecOperations
+    @get:Inject abstract val files: FileSystemOperations
+
+    @TaskAction fun generate() {
+        val output = outputDirectory.get().asFile
+        files.delete { delete(output) }
+        exec.exec {
+            workingDir(repository.get().asFile)
+            commandLine("cargo", "run", "--locked", "-p", "uniffi-bindgen",
+                "--target-dir", targetDirectory.get().asFile.absolutePath, "--",
+                "generate", "--library", library.singleFile.absolutePath,
+                "--language", "kotlin", "--no-format", "--out-dir", output.absolutePath)
+            environment(toolEnvironment.get())
+        }
+    }
+}
+
+// Bindings come from the same archive the variant links, so the Kotlin side
+// always matches the native library it loads.
+fun registerBindingsTask(name: String, rustTask: TaskProvider<BuildRust>) =
+    tasks.register<GenerateBindings>(name) {
+        library.from(rustTask.flatMap { it.outputDirectory.file("${nativeAbis.keys.first()}/liblitz_android.a") })
+        generatorInputs.from(file("../../crates/android-native/uniffi.toml"), fileTree("../../crates/uniffi-bindgen"))
+        outputDirectory.set(layout.buildDirectory.dir("generated/uniffi/${rustTask.name}"))
+        repository.set(rootProject.layout.projectDirectory.dir(".."))
+        targetDirectory.set(layout.buildDirectory.dir("rust-host-target"))
+        toolEnvironment.set(hostEnvironment())
+    }
+
+val bindingsDebug = registerBindingsTask("generateBindingsDebug", rustDebug)
+val bindingsRelease = registerBindingsTask("generateBindingsRelease", rustRelease)
+
+abstract class BuildHostLibrary : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val rustInputs: ConfigurableFileCollection
+    @get:Internal abstract val repository: DirectoryProperty
+    @get:OutputDirectory abstract val targetDirectory: DirectoryProperty
+    @get:Input abstract val toolEnvironment: MapProperty<String, String>
+    @get:Inject abstract val exec: ExecOperations
+
+    @TaskAction fun build() {
+        exec.exec {
+            workingDir(repository.get().asFile)
+            commandLine("cargo", "rustc", "--locked", "-p", "litz-android", "--lib",
+                "--crate-type", "cdylib", "--target-dir", targetDirectory.get().asFile.absolutePath)
+            environment(toolEnvironment.get())
+        }
+    }
+}
+
+// JVM tests call the real bridge through JNA, against a host build of the library.
+val hostLibrary = tasks.register<BuildHostLibrary>("buildHostLibrary") {
+    rustInputs.from(fileTree("../../crates/android-native"), fileTree("../../crates/core"),
+        file("../../Cargo.toml"), file("../../Cargo.lock"), file("../../rust-toolchain.toml"))
+    repository.set(rootProject.layout.projectDirectory.dir(".."))
+    targetDirectory.set(layout.buildDirectory.dir("rust-host-library"))
+    toolEnvironment.set(providers.provider {
+        buildMap {
+            putAll(hostEnvironment().get())
+            listOf("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS", "NIX_CFLAGS_COMPILE", "NIX_LDFLAGS")
+                .forEach { name -> providers.environmentVariable(name).orNull?.let { put(name, it) } }
+        }
+    })
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(hostLibrary)
+    systemProperty("jna.library.path",
+        layout.buildDirectory.dir("rust-host-library/debug").get().asFile.absolutePath)
+}
+
 abstract class CopyNativeNotices : DefaultTask() {
     @get:InputFile abstract val projectLicense: RegularFileProperty
     @get:InputFile abstract val licenseException: RegularFileProperty
@@ -244,6 +333,9 @@ tasks.matching { it.name == "prePlayReleaseBuild" }.configureEach { dependsOn(ch
 
 androidComponents.onVariants { variant ->
     variant.sources.assets?.addGeneratedSourceDirectory(nativeNotices, CopyNativeNotices::outputDirectory)
+    variant.sources.kotlin?.addGeneratedSourceDirectory(
+        if (variant.buildType == "release") bindingsRelease else bindingsDebug,
+        GenerateBindings::outputDirectory)
     if (variant.flavorName == "play" && variant.buildType == "release") {
         variant.manifestPlaceholders.put("admobAppId", admobAppId.get())
         variant.buildConfigFields?.put("ADMOB_BANNER_ID",

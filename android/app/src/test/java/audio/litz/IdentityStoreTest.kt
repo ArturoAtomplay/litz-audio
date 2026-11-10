@@ -2,12 +2,12 @@ package audio.litz
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import audio.litz.native.Identity
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.crypto.spec.SecretKeySpec
-import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,8 +21,8 @@ class IdentityStoreTest {
     private val key = SecretKeySpec(ByteArray(32) { 7 }, "AES")
 
     private fun store(
-        initial: String =
-            """{"desktop":[],"certificate":[1],"private_key":[2],"endpoint":"127.0.0.1:47165"}"""
+        initial: Identity =
+            Identity(ByteArray(0), byteArrayOf(1, -56), byteArrayOf(2), "127.0.0.1:47165")
     ) = IdentityStore(context, identityFactory = { initial }, keyProvider = { key })
 
     @Test
@@ -36,12 +36,12 @@ class IdentityStoreTest {
             val one =
                 pool.submit {
                     start.await()
-                    a.remember("One", JSONArray("[1,2,3]"), "192.0.2.1:47165")
+                    a.remember("One", byteArrayOf(1, 2, 3), "192.0.2.1:47165")
                 }
             val two =
                 pool.submit {
                     start.await()
-                    b.remember("Two", JSONArray("[4,5,6]"), "192.0.2.2:47165")
+                    b.remember("Two", byteArrayOf(4, 5, 6), "192.0.2.2:47165")
                 }
             start.countDown()
             one.get(5, TimeUnit.SECONDS)
@@ -72,5 +72,17 @@ class IdentityStoreTest {
         val identity = store().loadOrCreate()
         assertEquals(1, identity.getInt("registry_version"))
         assertEquals(0, identity.getJSONArray("known_desktops").length())
+    }
+
+    @Test
+    fun bytes_keep_the_stored_format_and_come_back_unchanged() {
+        File(context.noBackupFilesDir, "identity.gcm").delete()
+        val identity = store().loadOrCreate()
+        assertEquals(200, identity.getJSONArray("certificate").getInt(1))
+        val phone = store().phone()
+        assertArrayEquals(byteArrayOf(1, -56), phone.certificate)
+        assertEquals("127.0.0.1:47165", phone.endpoint)
+        store().remember("One", byteArrayOf(-1), "192.0.2.1:47165")
+        assertArrayEquals(byteArrayOf(-1), store().readSelected()!!.desktop)
     }
 }

@@ -4,6 +4,8 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import audio.litz.native.Identity
+import audio.litz.native.createIdentity
 import java.io.File
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -14,71 +16,15 @@ import javax.crypto.spec.GCMParameterSpec
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal interface IdentityRepository {
-    fun loadOrCreate(): JSONObject
-
-    fun remember(name: String, certificate: JSONArray, endpoint: String): JSONObject
-
-    fun select(fingerprint: String): JSONObject
-
-    fun saved(): List<SavedComputer>
-
-    fun readSelected(): String?
-
-    fun selectedFingerprint(): String?
-
-    fun forget(fingerprint: String)
-
-    fun updateAddress(fingerprint: String, endpoint: String): Boolean
-}
-
-internal class FakeIdentityRepository(
-    private var identity: JSONObject =
-        JSONObject().apply {
-            put("registry_version", 1)
-            put("known_desktops", JSONArray())
-        }
-) : IdentityRepository {
-    private val computers = mutableListOf<SavedComputer>()
-
-    override fun loadOrCreate(): JSONObject = identity
-
-    override fun remember(name: String, certificate: JSONArray, endpoint: String): JSONObject {
-        computers.removeAll { it.endpoint == endpoint }
-        computers.add(SavedComputer(name, pin(certificate), endpoint))
-        return identity
-    }
-
-    override fun select(fingerprint: String): JSONObject = identity
-
-    override fun saved(): List<SavedComputer> = computers
-
-    override fun readSelected(): String? = computers.firstOrNull()?.let { identity.toString() }
-
-    override fun selectedFingerprint(): String? = computers.firstOrNull()?.fingerprint
-
-    override fun forget(fingerprint: String) {
-        computers.removeAll { it.fingerprint == fingerprint }
-    }
-
-    override fun updateAddress(fingerprint: String, endpoint: String): Boolean {
-        val index = computers.indexOfFirst { it.fingerprint == fingerprint }
-        return if (index >= 0) {
-            computers[index] = computers[index].copy(endpoint = endpoint)
-            true
-        } else false
-    }
-}
-
 /**
  * App-private, backup-excluded, atomic ciphertext. Keys never leave Keystore. TLS signing is native
  * software signing; this does NOT claim hardware TLS keys.
  */
 internal class IdentityStore(
     context: Context,
-    private val identityFactory: () -> String = { Native.createIdentity() },
+    private val identityFactory: () -> Identity = ::createIdentity,
     private val keyProvider: () -> SecretKey = ::identityKey,
-) : IdentityRepository {
+) {
     companion object {
         private val monitor = Any()
     }
@@ -117,13 +63,15 @@ internal class IdentityStore(
         }
     }
 
-    override fun loadOrCreate(): JSONObject =
+    fun loadOrCreate(): JSONObject =
         synchronized(monitor) {
             val existing = read()
             if (existing == null) {
-                val created = JSONObject(identityFactory())
-                check(!created.has("error")) { "Could not create phone identity" }
-                created.put("registry_version", 1).put("known_desktops", JSONArray())
+                val created =
+                    identityFactory()
+                        .toJson()
+                        .put("registry_version", 1)
+                        .put("known_desktops", JSONArray())
                 write(created.toString())
                 created
             } else {
@@ -136,8 +84,9 @@ internal class IdentityStore(
             }
         }
 
-    override fun remember(name: String, certificate: JSONArray, endpoint: String): JSONObject =
+    fun remember(name: String, certificate: ByteArray, endpoint: String): JSONObject =
         synchronized(monitor) {
+            val certificate = bytes(certificate)
             val identity = loadOrCreate()
             val saved = identity.getJSONArray("known_desktops")
             val pin = pin(certificate)
@@ -159,7 +108,7 @@ internal class IdentityStore(
             identity
         }
 
-    override fun select(fingerprint: String): JSONObject =
+    fun select(fingerprint: String): JSONObject =
         synchronized(monitor) {
             val identity = loadOrCreate()
             val saved = identity.getJSONArray("known_desktops")
@@ -175,7 +124,7 @@ internal class IdentityStore(
             identity
         }
 
-    override fun saved(): List<SavedComputer> {
+    fun saved(): List<SavedComputer> {
         val saved = loadOrCreate().getJSONArray("known_desktops")
         return (0 until saved.length())
             .map { saved.getJSONObject(it) }
@@ -188,15 +137,17 @@ internal class IdentityStore(
             }
     }
 
-    override fun readSelected(): String? {
+    fun phone(): Identity = loadOrCreate().toIdentity()
+
+    fun readSelected(): Identity? {
         val identity = loadOrCreate()
-        return identity.toString().takeIf { (identity.optJSONArray("desktop")?.length() ?: 0) > 0 }
+        return identity.takeIf { (it.optJSONArray("desktop")?.length() ?: 0) > 0 }?.toIdentity()
     }
 
-    override fun selectedFingerprint(): String? =
+    fun selectedFingerprint(): String? =
         loadOrCreate().optJSONArray("desktop")?.takeIf { it.length() > 0 }?.let(::pin)
 
-    override fun forget(fingerprint: String) =
+    fun forget(fingerprint: String) =
         synchronized(monitor) {
             val identity = loadOrCreate()
             val saved = identity.getJSONArray("known_desktops")
@@ -208,7 +159,7 @@ internal class IdentityStore(
             write(identity.toString())
         }
 
-    override fun updateAddress(fingerprint: String, endpoint: String): Boolean =
+    fun updateAddress(fingerprint: String, endpoint: String): Boolean =
         synchronized(monitor) {
             val identity = loadOrCreate()
             val saved = identity.getJSONArray("known_desktops")
@@ -230,6 +181,26 @@ internal class IdentityStore(
             changed
         }
 }
+
+/** The stored form: each byte as a number from 0 to 255. */
+private fun bytes(value: ByteArray) = JSONArray(value.map { it.toInt() and 0xff })
+
+private fun JSONArray.toBytes() = ByteArray(length()) { getInt(it).toByte() }
+
+private fun Identity.toJson(): JSONObject =
+    JSONObject()
+        .put("desktop", bytes(desktop))
+        .put("certificate", bytes(certificate))
+        .put("private_key", bytes(privateKey))
+        .put("endpoint", endpoint)
+
+private fun JSONObject.toIdentity() =
+    Identity(
+        desktop = getJSONArray("desktop").toBytes(),
+        certificate = getJSONArray("certificate").toBytes(),
+        privateKey = getJSONArray("private_key").toBytes(),
+        endpoint = getString("endpoint"),
+    )
 
 internal fun pin(certificate: JSONArray): String {
     val bytes = ByteArray(certificate.length()) { certificate.getInt(it).toByte() }

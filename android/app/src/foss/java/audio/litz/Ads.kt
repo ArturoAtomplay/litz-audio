@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 
@@ -72,21 +73,26 @@ internal fun AdBanner() {
                     )
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("Litz is free and ad-free", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Help keep it that way",
+                        stringResource(R.string.support_title),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        stringResource(R.string.support_body),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                FilledTonalButton(onClick = { uriHandler.openUri(SUPPORT_URL) }) { Text("Support") }
+                FilledTonalButton(onClick = { uriHandler.openUri(SUPPORT_URL) }) {
+                    Text(stringResource(R.string.support_action))
+                }
                 TextButton(
                     onClick = {
                         prefs.edit { putLong("snoozed_at", System.currentTimeMillis()) }
                         visible = false
                     }
                 ) {
-                    Text("Later")
+                    Text(stringResource(R.string.support_later))
                 }
             }
         }
@@ -97,8 +103,8 @@ internal fun AdBanner() {
 internal fun StoreOptions() {
     val uriHandler = LocalUriHandler.current
     SettingRow(
-        "Support Litz",
-        "Litz is free and has no ads. A donation keeps it that way.",
+        stringResource(R.string.support_setting),
+        stringResource(R.string.support_setting_description),
         onClick = { uriHandler.openUri(SUPPORT_URL) },
     )
 }

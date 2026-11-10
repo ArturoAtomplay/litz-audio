@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="support_title">Litz is free and ad-free</string>
+    <string name="support_body">Help keep it that way</string>
+    <string name="support_action">Support</string>
+    <string name="support_later">Later</string>
+    <string name="support_setting">Support Litz</string>
+    <string name="support_setting_description">Litz is free and has no ads. A donation keeps it that way.</string>
+</resources>

@@ -1,34 +1,42 @@
-fn default_source() -> i32 {
-    0
-}
 use crate::Identity;
-use crate::audio::{Audio, GainLimiter};
+use crate::audio::{Audio, AudioInfo, GainLimiter, ListeningStats};
+use crate::failure::{FORGOTTEN, Failure, MOVED, cause};
 use litz_core::media::codec::Encoder;
 use litz_core::media::receiver::Receiver;
 use litz_core::protocol::{
-    Code, Config, DesktopRoutes, FRAME, MAX_DATAGRAM, Message, Record, Route, Stream,
+    Code, Config, DesktopRoutes, FRAME, MAX_DATAGRAM, Message, Record, Route, Stream, VoiceSettings,
 };
 use litz_core::transport::{self, Control, MediaSender, Result};
-use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct Settings {
+    #[uniffi(default)]
     pub mic: bool,
+    #[uniffi(default)]
     pub playback: bool,
+    #[uniffi(default)]
     pub muted: bool,
+    #[uniffi(default = 1.0)]
     pub mic_gain: f32,
+    #[uniffi(default = 1.0)]
     pub playback_gain: f32,
+    #[uniffi(default)]
     pub input: i32,
-    #[serde(default = "default_source")]
+    #[uniffi(default)]
     pub source: i32,
+    #[uniffi(default)]
     pub output: i32,
+    #[uniffi(default = true)]
     pub reconnect: bool,
+    #[uniffi(default)]
     pub takeover: Option<u64>,
+    #[uniffi(default)]
     pub raw_supported: bool,
+    #[uniffi(default)]
     pub headset_ids: Vec<i32>,
 }
 impl Default for Settings {
@@ -115,8 +123,6 @@ fn can_reuse_audio(
         && (!desired.mic || desired.muted || encoder_present || old.muted)
         && (!desired.playback || receiver_present)
 }
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
     Status,
     Connect,
@@ -124,7 +130,7 @@ enum Command {
     Disconnect,
     Forget,
     Address {
-        endpoint: std::net::SocketAddr,
+        endpoint: SocketAddr,
     },
     Route {
         expected_revision: u64,
@@ -132,7 +138,7 @@ enum Command {
     },
     Voice {
         expected_revision: u64,
-        voice: litz_core::protocol::VoiceSettings,
+        voice: VoiceSettings,
     },
     Set {
         settings: Settings,
@@ -141,16 +147,126 @@ enum Command {
 }
 struct Request {
     command: Command,
-    reply: mpsc::SyncSender<String>,
+    reply: mpsc::SyncSender<Status>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Enum)]
+pub enum SessionState {
+    Idle,
+    Authenticated,
+    Streaming,
+    Reconnecting,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct Direction {
+    pub running: bool,
+    pub error: Option<Failure>,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct Status {
+    pub state: SessionState,
+    pub reconnect_allowed: bool,
+    pub revoked: bool,
+    pub enrolled: bool,
+    pub desktop: SocketAddr,
+    pub connected_endpoint: Option<SocketAddr>,
+    pub desired: Settings,
+    pub microphone: Direction,
+    pub listening: Direction,
+    pub owner: Option<String>,
+    pub ownership_generation: Option<u64>,
+    pub owned: bool,
+    pub desktop_routes: Option<DesktopRoutes>,
+    pub error: Option<Failure>,
+    pub microphone_rms: Option<f32>,
+    pub audio: Option<AudioInfo>,
+    pub callback_frames: Option<u64>,
+    pub rtt_ms: Option<f64>,
+    pub listening_stats: Option<ListeningStats>,
+    pub transport_drops: Option<u64>,
+}
+
+#[derive(uniffi::Object)]
 pub struct Engine {
     tx: Option<tokio::sync::mpsc::Sender<Request>>,
     worker: Option<std::thread::JoinHandle<()>>,
     cancel: Arc<tokio::sync::Notify>,
     cancelled: Arc<AtomicBool>,
 }
+#[uniffi::export]
 impl Engine {
-    pub fn try_new(identity: Identity) -> Result<Self> {
+    #[uniffi::constructor]
+    pub fn new(identity: Identity) -> std::result::Result<Arc<Self>, Failure> {
+        Self::start(identity)
+            .map(Arc::new)
+            .map_err(|error| Failure::of(error.as_ref()))
+    }
+
+    /// Stops pending work at once, from any thread, even mid-command.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.cancel.notify_one();
+    }
+
+    pub fn status(&self) -> std::result::Result<Status, Failure> {
+        self.request(Command::Status)
+    }
+
+    pub fn connect(&self) -> std::result::Result<Status, Failure> {
+        self.request(Command::Connect)
+    }
+
+    pub fn refresh_routes(&self) -> std::result::Result<Status, Failure> {
+        self.request(Command::RefreshRoutes)
+    }
+
+    pub fn disconnect(&self) -> std::result::Result<Status, Failure> {
+        self.request(Command::Disconnect)
+    }
+
+    pub fn forget(&self) -> std::result::Result<Status, Failure> {
+        self.request(Command::Forget)
+    }
+
+    pub fn address(&self, endpoint: SocketAddr) -> std::result::Result<Status, Failure> {
+        self.request(Command::Address { endpoint })
+    }
+
+    pub fn route(
+        &self,
+        expected_revision: u64,
+        route: Route,
+    ) -> std::result::Result<Status, Failure> {
+        self.request(Command::Route {
+            expected_revision,
+            route,
+        })
+    }
+
+    pub fn voice(
+        &self,
+        expected_revision: u64,
+        voice: VoiceSettings,
+    ) -> std::result::Result<Status, Failure> {
+        self.request(Command::Voice {
+            expected_revision,
+            voice,
+        })
+    }
+
+    pub fn set(&self, settings: Settings) -> std::result::Result<Status, Failure> {
+        self.request(Command::Set { settings })
+    }
+
+    pub fn stop(&self) -> std::result::Result<Status, Failure> {
+        self.request(Command::Stop)
+    }
+}
+
+impl Engine {
+    fn start(identity: Identity) -> Result<Self> {
         #[cfg(target_os = "android")]
         {
             static PANIC_LOG: std::sync::Once = std::sync::Once::new();
@@ -198,19 +314,19 @@ impl Engine {
             cancelled,
         })
     }
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-        self.cancel.notify_one();
-    }
-    pub fn command(&self, json: &str) -> Result<String> {
-        let command = serde_json::from_str(json).map_err(|_| "invalid native command")?;
+    fn request(&self, command: Command) -> std::result::Result<Status, Failure> {
+        let closed = || Failure::Internal {
+            detail: "engine closed".into(),
+        };
         let (reply, result) = mpsc::sync_channel(1);
         self.tx
             .as_ref()
-            .ok_or("engine closed")?
+            .ok_or_else(closed)?
             .blocking_send(Request { command, reply })
-            .map_err(|_| "engine closed")?;
-        Ok(result.recv_timeout(Duration::from_secs(30))?)
+            .map_err(|_| closed())?;
+        result
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| Failure::ControlTimeout)
     }
 }
 impl Drop for Engine {
@@ -286,7 +402,7 @@ impl Media {
         if audio.fault() {
             audio.silence();
             if audio.info().error != 0 {
-                return Err("Audio device disconnected".into());
+                return Err(Failure::AudioDeviceDisconnected.into());
             }
             return Err(Failure::AudioDiscontinuity.into());
         }
@@ -391,7 +507,7 @@ struct Connected {
     epoch: u32,
     revision: u64,
     running: [Option<Config>; 2],
-    direction_errors: [Option<String>; 2],
+    direction_errors: [Option<Failure>; 2],
     desktop: Option<DesktopRoutes>,
     owner: Option<String>,
     generation: u64,
@@ -425,11 +541,13 @@ impl Connected {
                         let mut remaining = self.media.settings.clone();
                         remaining.playback = false;
                         self.apply(&remaining).await?;
-                        self.direction_errors[1] = Some("Desktop endpoint disappeared or route conflicted. Choose a computer output in Settings, then retry Listen.".into());
+                        self.direction_errors[1] = Some(Failure::ComputerRefused {
+                            reason: Code::RouteConflict,
+                        });
                         self.refresh_routes().await?;
                         Ok(())
                     }
-                    Ok(_) => Err("desktop route/state changed".into()),
+                    Ok(_) => Err(Failure::UnexpectedReply.into()),
                     Err(e) => Err(e),
                 }
             }
@@ -453,10 +571,10 @@ impl Connected {
                             self.desktop = Some(desktop);
                             continue;
                         }
-                        return Err("desktop route became unavailable".into());
+                        return Err(Failure::UnexpectedReply.into());
                     }
                     if record.request_id != self.request {
-                        return Err("unexpected control response".into());
+                        return Err(Failure::UnexpectedReply.into());
                     }
                     if let Message::Status { revision, running } = &record.message {
                         self.revision = *revision;
@@ -482,7 +600,7 @@ impl Connected {
                 self.desktop = desktop;
                 Ok(())
             }
-            _ => Err("invalid Capabilities response".into()),
+            _ => Err(Failure::UnexpectedReply.into()),
         }
     }
     async fn route(
@@ -490,13 +608,11 @@ impl Connected {
         expected_revision: u64,
         route: Route,
         desired: &Settings,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<Failure>> {
         self.acquire(None).await?;
         self.refresh_routes().await?;
         if expected_revision != self.revision {
-            return Ok(Some(
-                "Computer outputs changed. Refresh the output list and try again.".into(),
-            ));
+            return Ok(Some(Failure::OutputsChanged));
         }
         if self.running[1].is_some() {
             let _ = self
@@ -536,9 +652,9 @@ impl Connected {
                     }
                     Message::Error { code } => {
                         self.media.settings.playback = false;
-                        self.direction_errors[1] = Some(format!("desktop: {code:?}"));
+                        self.direction_errors[1] = Some(Failure::ComputerRefused { reason: code });
                     }
-                    _ => return Err("Desktop did not restart listening after route change".into()),
+                    _ => return Err(Failure::UnexpectedReply.into()),
                 }
             } else {
                 self.media.settings.playback = false;
@@ -549,17 +665,15 @@ impl Connected {
         }
         Ok(match response {
             Message::Status { .. } => None,
-            Message::Error { code } => Some(format!(
-                "Desktop source change refused or incomplete: {code:?}. Review the actual applied route and try again."
-            )),
-            _ => Some("Desktop did not acknowledge the route".into()),
+            Message::Error { code } => Some(Failure::ComputerRefused { reason: code }),
+            _ => Some(Failure::UnexpectedReply),
         })
     }
     async fn voice(
         &mut self,
         expected_revision: u64,
         voice: litz_core::protocol::VoiceSettings,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<Failure>> {
         self.acquire(None).await?;
         let response = self
             .rpc(Message::ApplyVoice {
@@ -573,10 +687,8 @@ impl Connected {
         }
         Ok(match response {
             Message::Status { .. } => None,
-            Message::Error { code } => Some(format!(
-                "Voice settings were not applied: {code:?}. Refresh and try again."
-            )),
-            _ => Some("Computer did not acknowledge voice settings".into()),
+            Message::Error { code } => Some(Failure::ComputerRefused { reason: code }),
+            _ => Some(Failure::UnexpectedReply),
         })
     }
     async fn stop_streams(&mut self) -> Result<()> {
@@ -588,7 +700,7 @@ impl Connected {
                     Message::Status { .. }
                 )
             {
-                return Err("desktop stop refused".into());
+                return Err(Failure::UnexpectedReply.into());
             }
         }
         self.media.settings.mic = false;
@@ -615,10 +727,9 @@ impl Connected {
                 .await?;
             }
             if !self.owned {
-                return Err(format!(
-                    "In use by {}. Turn on the microphone or listening here to move audio to this phone.",
-                    self.owner.as_deref().unwrap_or("another phone")
-                )
+                return Err(Failure::InUse {
+                    owner: self.owner.clone(),
+                }
                 .into());
             }
             self.refresh_routes().await?;
@@ -660,7 +771,7 @@ impl Connected {
                     };
                     if !matches!(self.rpc(Message::Start(config)).await?, Message::Status { running, .. } if running[0] == Some(config))
                     {
-                        return Err("Microphone could not resume".into());
+                        return Err(Failure::UnexpectedReply.into());
                     }
                     self.media.captured_len = 0;
                     self.media.encoder = Some(Encoder::try_new(config)?);
@@ -695,7 +806,7 @@ impl Connected {
                     self.rpc(Message::Stop { stream }).await?,
                     Message::Status { .. }
                 ) {
-                    return Err("desktop stop refused".into());
+                    return Err(Failure::UnexpectedReply.into());
                 }
                 if stream == Stream::Mic {
                     self.media.encoder = None;
@@ -727,12 +838,12 @@ impl Connected {
                 match Audio::open(true, false, desired.input, desired.output, source) {
                     Ok(a) => {
                         playback = false;
-                        self.direction_errors[1] = Some(e.to_string());
+                        self.direction_errors[1] = Some(Failure::of(e.as_ref()));
                         a
                     }
                     Err(input_error) => {
                         mic = false;
-                        self.direction_errors[0] = Some(input_error.to_string());
+                        self.direction_errors[0] = Some(Failure::of(input_error.as_ref()));
                         Audio::open(false, true, desired.input, desired.output, source)?
                     }
                 }
@@ -745,7 +856,7 @@ impl Connected {
                     self.rpc(Message::Stop { stream }).await?,
                     Message::Status { .. }
                 ) {
-                    return Err("desktop stop refused".into());
+                    return Err(Failure::UnexpectedReply.into());
                 }
                 if stream == Stream::Mic {
                     self.media.encoder = None;
@@ -772,27 +883,21 @@ impl Connected {
                     }
                 }
                 Message::Error { code } => {
-                    self.direction_errors[stream.index()] = Some(format!("desktop: {code:?}"));
+                    self.direction_errors[stream.index()] =
+                        Some(Failure::ComputerRefused { reason: code });
                     if stream == Stream::Mic {
                         mic = false;
                     } else {
                         playback = false;
                     }
                 }
-                _ => return Err("desktop did not apply stream configuration".into()),
+                _ => return Err(Failure::UnexpectedReply.into()),
             }
         }
         if mic != (desired.mic && !desired.muted) || playback != desired.playback {
             drop(audio);
             if !mic && !playback {
-                let details = self
-                    .direction_errors
-                    .iter()
-                    .flatten()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                return Err(Failure::Refused(details).into());
+                return Err(Failure::Refused.into());
             }
             audio = Audio::open(mic, playback, desired.input, desired.output, source)?;
         }
@@ -827,7 +932,7 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
     .map_err(|error| -> transport::Error {
         if matches!(&error, quinn::ConnectionError::TransportError(e) if u64::from(e.code) == 0x178)
         {
-            "Update Litz on both your phone and computer; their audio protocols differ".into()
+            Failure::ProtocolMismatch.into()
         } else {
             error.into()
         }
@@ -835,7 +940,7 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
     // Root verification alone would permit another CA-signed leaf. The pairing
     // approval pins the exact certificate as well.
     if transport::peer_certificate(&connection)? != identity.desktop {
-        return Err("desktop pin mismatch".into());
+        return Err(Failure::IdentityChanged.into());
     }
     let control = Control::new(connection.open_bi().await?);
     let now = Instant::now();
@@ -876,45 +981,14 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
         Message::Error {
             code: Code::Unauthorized,
         } => return Err(Failure::Revoked.into()),
-        Message::Error { code } => return Err(format!("desktop: {code:?}").into()),
-        _ => return Err("invalid GetState response".into()),
+        Message::Error { code } => return Err(Failure::ComputerRefused { reason: code }.into()),
+        _ => return Err(Failure::UnexpectedReply.into()),
     }
     c.rpc(Message::GetOwnership {}).await?;
     c.refresh_routes().await?;
     Ok(c)
 }
 
-#[derive(Debug, PartialEq)]
-enum Failure {
-    Cancelled,
-    ConnectTimeout,
-    ControlTimeout,
-    AudioDiscontinuity,
-    Revoked,
-    Refused(String),
-}
-impl std::fmt::Display for Failure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Cancelled => "Stopped",
-            Self::ConnectTimeout => "Computer is unavailable. Check that Litz is running on it.",
-            Self::ControlTimeout => "Desktop control timed out",
-            Self::AudioDiscontinuity => "Audio interrupted; recovering",
-            Self::Revoked => "This computer no longer trusts this phone. Pair again.",
-            Self::Refused(details) => details,
-        })
-    }
-}
-impl std::error::Error for Failure {}
-
-const FORGOTTEN: quinn::VarInt = quinn::VarInt::from_u32(0x21);
-const MOVED: quinn::VarInt = quinn::VarInt::from_u32(0x20);
-
-fn cause<'a, T: std::error::Error + 'static>(
-    error: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a T> {
-    std::iter::successors(Some(error), |e| e.source()).find_map(|e| e.downcast_ref())
-}
 fn retryable(error: &(dyn std::error::Error + 'static)) -> bool {
     for e in std::iter::successors(Some(error), |e| e.source()) {
         if let Some(connection) = e.downcast_ref::<quinn::ConnectionError>() {
@@ -983,7 +1057,7 @@ struct Supervisor {
     desired: Settings,
     connected: Option<Box<Connected>>,
     handoff: Option<(std::net::SocketAddr, Handoff)>,
-    error: Option<String>,
+    error: Option<Failure>,
     recovery: Recovery,
     retry: Option<tokio::time::Instant>,
     attempt: u32,
@@ -1037,56 +1111,53 @@ impl Supervisor {
 
     fn lost(&mut self, error: &transport::Error, retry_anyway: bool) {
         self.recovery = Recovery::after(error.as_ref(), retry_anyway);
-        self.error = Some(error.to_string());
+        self.error = Some(Failure::of(error.as_ref()));
         self.connected = None;
         if self.recovery == Recovery::Automatic && self.desired.reconnect && self.active() {
             self.retry_soon();
         }
     }
 
-    fn status(&self) -> String {
+    fn status(&self) -> Status {
         let c = self.connected.as_deref();
         let audio = c.and_then(|c| c.media.audio.as_ref());
-        let listening = audio
-            .filter(|_| c.is_some_and(|c| c.media.listening.is_some()))
-            .map(Audio::listening);
         let state = if self.retry.is_some() {
-            "Reconnecting"
+            SessionState::Reconnecting
         } else if audio.is_some() {
-            "Streaming"
+            SessionState::Streaming
         } else if c.is_some() {
-            "Authenticated"
+            SessionState::Authenticated
         } else {
-            "Idle"
+            SessionState::Idle
         };
-        serde_json::json!({
-            "state": state,
-            "reconnect_allowed": self.recovery == Recovery::Automatic,
-            "revoked": self.recovery == Recovery::PairAgain,
-            "desktop": self.identity.endpoint.to_string(),
-            "enrolled": !self.identity.desktop.is_empty(),
-            "connected_endpoint": c.map(|c| c.media.connection.remote_address().to_string()),
-            "desired": self.desired,
-            "running": c.map(|c| [c.media.encoder.is_some(), c.media.listening.is_some()].map(|r| r && audio.is_some())).unwrap_or_default(),
-            "revision": c.map(|c| c.revision),
-            "direction_errors": c.map(|c| &c.direction_errors),
-            "owner": c.and_then(|c| c.owner.as_ref()),
-            "ownership_generation": c.map(|c| c.generation),
-            "owned": c.is_some_and(|c| c.owned),
-            "desktop_routes": c.and_then(|c| c.desktop.as_ref()),
-            "applied": c.map(|c| &c.media.settings),
-            "error": self.error,
-            "microphone_rms": c.map(|c| c.media.microphone_rms),
-            "audio": audio.map(Audio::info),
-            "underruns": audio.map(|a| a.info().output_xruns),
-            "callback_frames": audio.map(Audio::callback_frames),
-            "rtt_ms": c.map(|c| c.media.connection.rtt().as_secs_f64() * 1000.0),
-            "jitter_ms": listening.as_ref().map(|l| l.buffer_ms),
-            "late_packets": listening.as_ref().map(|l| l.late),
-            "concealed_frames": listening.as_ref().map(|l| l.concealed),
-            "transport_drops": c.map(|c| c.media.dropped),
-        })
-        .to_string()
+        let direction = |running: fn(&Media) -> bool, index: usize| Direction {
+            running: c.is_some_and(|c| running(&c.media) && c.media.audio.is_some()),
+            error: c.and_then(|c| c.direction_errors[index].clone()),
+        };
+        Status {
+            state,
+            reconnect_allowed: self.recovery == Recovery::Automatic,
+            revoked: self.recovery == Recovery::PairAgain,
+            enrolled: !self.identity.desktop.is_empty(),
+            desktop: self.identity.endpoint,
+            connected_endpoint: c.map(|c| c.media.connection.remote_address()),
+            desired: self.desired.clone(),
+            microphone: direction(|media| media.encoder.is_some(), 0),
+            listening: direction(|media| media.listening.is_some(), 1),
+            owner: c.and_then(|c| c.owner.clone()),
+            ownership_generation: c.map(|c| c.generation),
+            owned: c.is_some_and(|c| c.owned),
+            desktop_routes: c.and_then(|c| c.desktop.clone()),
+            error: self.error.clone(),
+            microphone_rms: c.map(|c| c.media.microphone_rms),
+            audio: audio.map(Audio::info),
+            callback_frames: audio.map(Audio::callback_frames),
+            rtt_ms: c.map(|c| c.media.connection.rtt().as_secs_f64() * 1000.0),
+            listening_stats: audio
+                .filter(|_| c.is_some_and(|c| c.media.listening.is_some()))
+                .map(Audio::listening),
+            transport_drops: c.map(|c| c.media.dropped),
+        }
     }
 
     async fn next(
@@ -1138,13 +1209,17 @@ impl Supervisor {
                         .rpc(Message::GetOwnership {})
                         .await
                         .err()
-                        .map(|e| e.to_string());
+                        .map(|e| Failure::of(e.as_ref()));
                 }
             }
             Command::Address { endpoint } => self.address(endpoint),
             Command::RefreshRoutes => {
                 if let Some(c) = self.connected.as_mut() {
-                    self.error = c.refresh_routes().await.err().map(|e| e.to_string());
+                    self.error = c
+                        .refresh_routes()
+                        .await
+                        .err()
+                        .map(|e| Failure::of(e.as_ref()));
                 }
             }
             Command::Connect => {
@@ -1155,7 +1230,7 @@ impl Supervisor {
                         Ok(c) => self.connected(c),
                         Err(e) => {
                             self.recovery = Recovery::after(e.as_ref(), false);
-                            self.error = Some(e.to_string());
+                            self.error = Some(Failure::of(e.as_ref()));
                         }
                     }
                 }
@@ -1179,7 +1254,7 @@ impl Supervisor {
             } => {
                 let result = match self.connected.as_mut() {
                     Some(c) => c.route(expected_revision, route, &self.desired).await,
-                    None => Err("Connect to the desktop first".into()),
+                    None => Err(Failure::NotConnected.into()),
                 };
                 self.settle(result);
             }
@@ -1189,7 +1264,7 @@ impl Supervisor {
             } => {
                 let result = match self.connected.as_mut() {
                     Some(c) => c.voice(expected_revision, voice).await,
-                    None => Err("Connect to the computer first".into()),
+                    None => Err(Failure::NotConnected.into()),
                 };
                 self.settle(result);
             }
@@ -1199,7 +1274,7 @@ impl Supervisor {
                 if let Some(c) = self.connected.as_mut()
                     && let Err(e) = c.release().await
                 {
-                    self.error = Some(e.to_string());
+                    self.error = Some(Failure::of(e.as_ref()));
                     // A failed release must not keep ownership.
                     self.connected = None;
                 }
@@ -1239,7 +1314,7 @@ impl Supervisor {
         }
     }
 
-    fn settle(&mut self, result: Result<Option<String>>) {
+    fn settle(&mut self, result: Result<Option<Failure>>) {
         match result {
             Ok(notice) => self.error = notice,
             Err(e) => {
@@ -1264,12 +1339,12 @@ impl Supervisor {
         match cause::<Failure>(e.as_ref()) {
             Some(Failure::Cancelled) => {
                 self.shut_down();
-                self.error = Some(e.to_string());
+                self.error = Some(Failure::of(e.as_ref()));
             }
-            Some(Failure::Refused(_)) => {
+            Some(Failure::Refused) => {
                 self.stop_wanting_audio();
                 self.recovery = Recovery::Manual;
-                self.error = Some(e.to_string());
+                self.error = Some(Failure::of(e.as_ref()));
                 if let Some(c) = self.connected.as_mut()
                     && c.release().await.is_err()
                 {
@@ -1279,7 +1354,7 @@ impl Supervisor {
             _ if self.connected.as_ref().is_some_and(|c| !c.owned) => {
                 self.stop_wanting_audio();
                 self.recovery = Recovery::after(e.as_ref(), false);
-                self.error = Some(e.to_string());
+                self.error = Some(Failure::of(e.as_ref()));
             }
             _ => self.lost(&e, false),
         }
@@ -1409,12 +1484,10 @@ impl Supervisor {
             Ok(()) => {
                 self.recovery = Recovery::Automatic;
                 if input && self.desired.input != 0 {
-                    c.direction_errors[0] =
-                        Some("Input route disconnected; select and start again".into());
+                    c.direction_errors[0] = Some(Failure::RouteDisconnected);
                 }
                 if output && self.desired.output != 0 {
-                    c.direction_errors[1] =
-                        Some("Output route disconnected; select and start again".into());
+                    c.direction_errors[1] = Some(Failure::RouteDisconnected);
                 }
             }
             Err(e) => {
@@ -1445,7 +1518,7 @@ impl Supervisor {
             self.stop_wanting_audio();
             return;
         }
-        self.error = Some(e.to_string());
+        self.error = Some(Failure::of(e.as_ref()));
         self.recovery = Recovery::after(e.as_ref(), self.retry_auto_route);
         if self.recovery != Recovery::Automatic {
             self.retry = None;
@@ -1607,7 +1680,7 @@ mod tests {
 
     #[test]
     fn connection_and_reconnect_futures_keep_pcm_off_the_stack() {
-        let identity = crate::fresh_identity().unwrap();
+        let identity = crate::create_identity().unwrap();
         let (_, requests) = tokio::sync::mpsc::channel(2);
         let future = run(
             identity,
@@ -1625,10 +1698,10 @@ mod tests {
 
     #[test]
     fn offline_start_stop_and_close_do_not_panic() {
-        let mut identity = crate::fresh_identity().unwrap();
+        let mut identity = crate::create_identity().unwrap();
         identity.desktop = identity.certificate.clone();
         identity.endpoint = "127.0.0.1:9".parse().unwrap();
-        let engine = Engine::try_new(identity).unwrap();
+        let engine = Engine::new(identity).unwrap();
         for (mic, playback, reconnect) in [
             (true, false, false),
             (false, true, false),
@@ -1640,21 +1713,16 @@ mod tests {
                 reconnect,
                 ..Settings::default()
             };
-            let result = engine
-                .command(&serde_json::json!({ "op": "set", "settings": settings }).to_string())
-                .unwrap();
-            let status: serde_json::Value = serde_json::from_str(&result).unwrap();
-            assert_eq!(status["running"], serde_json::json!([false, false]));
-            assert!(status["error"].is_string());
+            let status = engine.set(settings).unwrap();
+            assert!(!status.microphone.running && !status.listening.running);
+            assert!(status.error.is_some());
             if reconnect {
-                assert_eq!(status["state"], "Reconnecting");
-                assert_eq!(status["reconnect_allowed"], true);
+                assert_eq!(status.state, SessionState::Reconnecting);
+                assert!(status.reconnect_allowed);
             }
-            let result = engine.command(r#"{"op":"stop"}"#).unwrap();
-            let status: serde_json::Value = serde_json::from_str(&result).unwrap();
-            assert_eq!(status["desired"]["mic"], false);
-            assert_eq!(status["desired"]["playback"], false);
-            assert_eq!(status["state"], "Idle");
+            let status = engine.stop().unwrap();
+            assert!(!status.desired.mic && !status.desired.playback);
+            assert_eq!(status.state, SessionState::Idle);
         }
         engine.cancel();
         drop(engine);
@@ -1711,7 +1779,7 @@ mod tests {
         for code in [1, 0x20, 0x22] {
             assert_eq!(Recovery::after(&closed(code), false), Recovery::Manual);
         }
-        let refused = Failure::Refused("desktop: RouteConflict".into());
+        let refused = Failure::Refused;
         assert_eq!(Recovery::after(&refused, false), Recovery::Manual);
         assert_eq!(
             Recovery::after(&quinn::ConnectionError::TimedOut, false),

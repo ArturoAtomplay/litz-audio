@@ -23,6 +23,7 @@ getrandom = "=0.4.3"
 bytes = "=1.12.1"
 opus = "=0.4.0"
 rubato = { version = "=5.0.1", default-features = false }
+uniffi = { version = "=0.32.2", default-features = false }
 
 [profile.dist]
 inherits = "release"

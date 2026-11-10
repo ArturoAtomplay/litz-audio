@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Litz Audio</string>
+    <string name="app_short_name" translatable="false">Litz</string>
+
+    <!-- Screens and common actions -->
+    <string name="screen_computers">Computers</string>
+    <string name="screen_settings">Settings</string>
+    <string name="action_done">Done</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_pair">Pair</string>
+    <string name="action_pair_again">Pair again</string>
+    <string name="action_try_again">Try again</string>
+    <string name="action_forget">Forget</string>
+    <string name="action_show">Show</string>
+    <string name="action_hide">Hide</string>
+    <string name="action_more">More</string>
+    <string name="unavailable">Unavailable</string>
+
+    <!-- Home and computers -->
+    <string name="home_add_title">Add your computer</string>
+    <string name="home_add_body">Install Litz on your computer and connect both devices to the same network. Then pick your computer below.</string>
+    <string name="computers_yours">Your computers</string>
+    <string name="computer_using_now">Using now</string>
+    <string name="computer_tap_to_switch">Tap to switch</string>
+    <string name="computer_change">Change computer</string>
+    <string name="computer_forget">Forget this computer</string>
+    <string name="computer_forget_title">Forget %1$s?</string>
+    <string name="computer_forget_body">To use it again, pair it from the Computers screen.</string>
+    <string name="computer_default_name">Computer</string>
+    <string name="status_revoked">This computer no longer trusts this phone</string>
+    <string name="status_in_use">In use by %1$s</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_connected_usb">Connected over USB</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_not_answering">Found on your network, but not answering</string>
+    <string name="status_offline">Offline</string>
+    <string name="hint_pair_again">Pair again to use it with this phone.</string>
+    <string name="hint_firewall">Make sure your computer\'s firewall allows Litz on UDP port 47165.</string>
+    <string name="hint_connects_by_itself">Litz connects on its own when %1$s is on.</string>
+
+    <!-- Pairing -->
+    <string name="nearby">Nearby</string>
+    <string name="nearby_looking">Looking for computers running Litz…</string>
+    <string name="nearby_none">No computers found. Tap Refresh to look again.</string>
+    <string name="nearby_tap_to_pair">Tap to pair</string>
+    <string name="pairing_with">Pairing with %1$s</string>
+    <string name="pairing_waiting">Waiting for your computer…</string>
+    <string name="pairing_allow_if_shows">Allow the connection on your computer if it shows:</string>
+    <string name="pairing_codes_differ">If the codes differ, cancel.</string>
+    <string name="pair_with_title">Pair with %1$s?</string>
+    <string name="pair_with_body">Tap Pair, then allow the connection on %1$s. You only do this once.</string>
+    <string name="pair_by_ip">Pair by IP address</string>
+    <string name="pair_by_ip_body">Enter the computer\'s local IPv4 address. Litz verifies the computer\'s identity before saving it.</string>
+    <string name="ip_address">IP address</string>
+    <string name="computer_name_optional">Computer name (optional)</string>
+    <string name="phone_default_name">Android phone</string>
+    <string name="paired_with">Paired with %1$s</string>
+    <string name="pairing_cancelled">Pairing cancelled</string>
+    <string name="pairing_failed">Pairing failed: %1$s</string>
+    <string name="computer_forgotten">Computer forgotten. Pair again to reconnect.</string>
+    <string name="computer_forget_failed">Could not forget the computer: %1$s</string>
+    <string name="computer_select_failed">Could not switch computers: %1$s</string>
+
+    <!-- Microphone and listening -->
+    <string name="microphone">Microphone</string>
+    <string name="microphone_description">Use your phone as a microphone</string>
+    <string name="mute">Mute</string>
+    <string name="mute_description">Your computer hears silence</string>
+    <string name="listen">Listen</string>
+    <string name="listen_description">Hear your computer on your phone</string>
+    <string name="volume">Volume</string>
+    <string name="volume_percent">%1$d%%</string>
+    <string name="volume_listening">Listening volume</string>
+    <string name="volume_boost_hint">Above 100%% boosts quiet audio.</string>
+    <string name="sound_from">Sound from</string>
+    <string name="output_default">Default output</string>
+    <string name="output_default_description">Follows your computer when it changes output</string>
+    <string name="route_default">Default · %1$s</string>
+    <string name="route_default_unavailable">Default output · unavailable</string>
+    <string name="route_disappeared_choose">Output disappeared · choose another</string>
+
+    <!-- Settings -->
+    <string name="settings_phone_microphone">Phone microphone</string>
+    <string name="recording_mode">Recording mode</string>
+    <string name="recording_mode_using">%1$s · using %2$s</string>
+    <string name="recording_mode_unknown">Unknown (%1$d)</string>
+    <string name="source_automatic">Automatic</string>
+    <string name="source_automatic_description">Recommended for most phones</string>
+    <string name="source_standard">Standard microphone</string>
+    <string name="source_standard_description">General recording mode</string>
+    <string name="source_calls">Calls and meetings</string>
+    <string name="source_calls_description">Optimized for voice calls</string>
+    <string name="source_speech">Speech recognition</string>
+    <string name="source_speech_description">Prioritizes clear speech</string>
+    <string name="source_performance">Live performance</string>
+    <string name="source_performance_description">Low latency when supported</string>
+    <string name="source_camera">Camera microphone</string>
+    <string name="source_camera_description">Camera recording mode</string>
+    <string name="source_raw">Raw microphone</string>
+    <string name="source_raw_description">Less processing when supported</string>
+    <string name="voice_header">Voice processing on your computer</string>
+    <string name="voice_not_connected">Not connected</string>
+    <string name="voice_connect_hint">Connect to your computer to adjust voice processing.</string>
+    <string name="voice_bypassed">Voice effects temporarily unavailable. Audio continues; retrying automatically.</string>
+    <string name="voice_recovering">Restoring voice effects. Audio continues without effects.</string>
+    <string name="noise_suppression">Noise suppression</string>
+    <string name="noise_suppression_off">Off</string>
+    <string name="noise_suppression_rnnoise_description">Light: removes steady background noise with little effect on your voice</string>
+    <string name="noise_suppression_deep_filter_description">Strong: removes more noise, but heavy noise may change how you sound</string>
+    <string name="automatic_level">Automatic level</string>
+    <string name="automatic_level_description">Keeps your voice at a steady volume</string>
+    <string name="input_sensitivity">Input sensitivity</string>
+    <string name="sensitivity_off">Off</string>
+    <string name="sensitivity_off_description">Always send your microphone</string>
+    <string name="sensitivity_automatic">Automatic</string>
+    <string name="sensitivity_automatic_description">Mutes background sound between words</string>
+    <string name="sensitivity_manual">Manual</string>
+    <string name="sensitivity_manual_description">Choose the level that counts as speech</string>
+    <string name="sensitivity_manual_value">Manual · %1$d dBFS</string>
+    <string name="voice_threshold">Voice threshold</string>
+    <string name="voice_threshold_hint">Lower picks up quieter speech. Higher blocks more background sound.</string>
+    <string name="input_level">Input level</string>
+    <string name="decibels_full_scale">%1$d dBFS</string>
+    <string name="equalizer">Equalizer</string>
+    <string name="equalizer_low">Low</string>
+    <string name="equalizer_mid">Mid</string>
+    <string name="equalizer_high">High</string>
+    <string name="decibels">%1$s dB</string>
+    <string name="about">About</string>
+    <string name="about_version">Litz %1$s</string>
+    <string name="about_license">Free software, GNU GPL 3.0 or later</string>
+    <string name="source_code">Source code</string>
+    <string name="diagnostics">Diagnostics</string>
+    <string name="diagnostics_description">Details to include in a bug report</string>
+    <string name="diagnostics_copy">Copy report</string>
+
+    <!-- Diagnostics -->
+    <string name="diagnostics_app">App</string>
+    <string name="diagnostics_version">Version</string>
+    <string name="diagnostics_android">Android</string>
+    <string name="diagnostics_phone">Phone</string>
+    <string name="diagnostics_connection">Connection</string>
+    <string name="diagnostics_status">Status</string>
+    <string name="diagnostics_round_trip">Round trip</string>
+    <string name="diagnostics_voice_processing">Voice processing</string>
+    <string name="diagnostics_dropped_packets">Dropped packets</string>
+    <string name="diagnostics_sample_rate">Sample rate</string>
+    <string name="diagnostics_latency_mode">Latency mode</string>
+    <string name="diagnostics_latency_low">Low</string>
+    <string name="diagnostics_latency_normal">Normal</string>
+    <string name="diagnostics_sharing">Sharing</string>
+    <string name="diagnostics_sharing_exclusive">Exclusive</string>
+    <string name="diagnostics_sharing_shared">Shared</string>
+    <string name="diagnostics_overruns">Overruns</string>
+    <string name="diagnostics_underruns">Underruns</string>
+    <string name="diagnostics_jitter_buffer">Jitter buffer</string>
+    <string name="diagnostics_late_packets">Late packets</string>
+    <string name="diagnostics_concealed_packets">Concealed packets</string>
+    <string name="diagnostics_buffer">Buffer</string>
+    <string name="diagnostics_callback">Callback</string>
+    <string name="diagnostics_errors">Errors</string>
+    <string name="diagnostics_error">Error</string>
+    <string name="diagnostics_in_use">In use by another phone</string>
+    <string name="diagnostics_reconnecting">Reconnecting</string>
+    <string name="diagnostics_on">On</string>
+    <string name="diagnostics_off">Off</string>
+    <string name="diagnostics_muted">Muted</string>
+    <string name="diagnostics_voice_off">Off</string>
+    <string name="diagnostics_voice_active">Active</string>
+    <string name="diagnostics_voice_bypassed">Bypassed</string>
+    <string name="diagnostics_voice_recovering">Recovering</string>
+    <string name="unit_milliseconds">%1$s ms</string>
+    <string name="unit_hertz">%1$d Hz</string>
+    <string name="unit_frames">%1$s frames</string>
+
+    <!-- Session notification -->
+    <string name="notification_channel">Audio session</string>
+    <string name="notification_title">Litz Audio · %1$s</string>
+    <string name="notification_text">%1$s · Microphone: %2$s · Listen: %3$s</string>
+    <string name="notification_connecting">Connecting</string>
+    <string name="notification_reconnecting">Reconnecting</string>
+    <string name="notification_streaming">Streaming</string>
+    <string name="notification_connected">Connected</string>
+    <string name="notification_idle">Idle</string>
+    <string name="notification_stop">Stop</string>
+    <string name="notification_mute">Mute microphone</string>
+
+    <!-- Messages from the phone -->
+    <string name="message_service_stopped">Litz stopped. Turn a direction on to start again.</string>
+    <string name="message_service_starting">Litz is starting; try again.</string>
+    <string name="message_pair_first">Pair a computer first.</string>
+    <string name="message_directions_stopped">Audio stopped</string>
+    <string name="message_device_disconnected">The selected audio device was disconnected, so that direction stopped.</string>
+    <string name="message_headphones_disconnected">Headphones disconnected. Tap Listen to use your phone speaker.</string>
+    <string name="message_microphone_permission_revoked">Microphone permission was removed.</string>
+    <string name="message_local_network_needed">Allow local network access to find nearby computers.</string>
+    <string name="message_permission_denied">Permission denied. Allow local network access and, for the microphone, microphone access in Android settings, then try again.</string>
+    <string name="discovery_failed">Nearby discovery failed (%1$d). Check network permissions and tap Refresh.</string>
+    <string name="discovery_unavailable">Nearby discovery unavailable: %1$s. Tap Refresh to try again.</string>
+    <string name="address_unavailable_code">Computer address unavailable (%1$d). Tap Refresh to try again.</string>
+    <string name="address_unavailable">Computer address unavailable: %1$s. Tap Refresh to try again.</string>
+    <string name="address_timed_out">Computer address lookup timed out. Tap Refresh to try again.</string>
+    <string name="address_failed">Computer address lookup failed (%1$d). Tap Refresh to try again.</string>
+
+    <!-- Failures reported by the native engine; codes in crates/android-native/failure-codes.txt -->
+    <string name="failure_cancelled">Stopped</string>
+    <string name="failure_connect_timeout">Computer is unavailable. Check that Litz is running on it.</string>
+    <string name="failure_control_timeout">The computer did not answer in time.</string>
+    <string name="failure_audio_discontinuity">Audio interrupted; recovering.</string>
+    <string name="failure_connection_lost">Connection to the computer was lost.</string>
+    <string name="failure_revoked">This computer no longer trusts this phone. Pair again.</string>
+    <string name="failure_moved">Audio moved to another phone.</string>
+    <string name="failure_refused">The computer could not start audio.</string>
+    <string name="failure_no_virtual_microphone">The computer has no virtual microphone. Install VB-CABLE on it to use this phone as a microphone.</string>
+    <string name="failure_capture_unavailable">The computer\'s sound can\'t be captured. Choose a computer output in Settings.</string>
+    <string name="failure_computer_busy">The computer is busy. Try again.</string>
+    <string name="failure_computer_refused">The computer refused the request (%1$s).</string>
+    <string name="failure_unexpected_reply">The computer sent an unexpected reply. Update Litz on both devices.</string>
+    <string name="failure_protocol_mismatch">Update Litz on both your phone and computer; their versions don\'t match.</string>
+    <string name="failure_identity_changed">This computer\'s identity changed. Pair it again only if you trust it.</string>
+    <string name="failure_in_use">In use by %1$s. Turn on the microphone or listening here to move audio to this phone.</string>
+    <string name="failure_in_use_another_phone">In use by another phone. Turn on the microphone or listening here to move audio to this phone.</string>
+    <string name="failure_outputs_changed">Computer outputs changed. Refresh the list and try again.</string>
+    <string name="failure_not_connected">Connect to the computer first.</string>
+    <string name="failure_audio_unavailable">This phone\'s audio device could not be opened.</string>
+    <string name="failure_audio_device_disconnected">Audio device disconnected.</string>
+    <string name="failure_input_disconnected">Input device disconnected. Choose one and start again.</string>
+    <string name="failure_output_disconnected">Output device disconnected. Choose one and start again.</string>
+    <string name="failure_pairing_unavailable">Pairing unavailable. Try again shortly.</string>
+    <string name="failure_pairing_declined">The computer declined the pairing request.</string>
+    <string name="failure_pairing_full">The computer declined: all its pairing slots are in use.</string>
+    <string name="failure_prompt_unavailable">The computer could not show the pairing prompt. Turn on notifications for Litz Audio on the computer, then try again.</string>
+    <string name="failure_internal">Something went wrong: %1$s</string>
+</resources>

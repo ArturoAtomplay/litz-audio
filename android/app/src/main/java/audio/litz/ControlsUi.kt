@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
@@ -87,7 +88,7 @@ internal fun AudioChoiceSheet(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = dismiss) { Text("Close") }
+            TextButton(onClick = dismiss) { Text(stringResource(R.string.action_close)) }
         }
         Column(
             Modifier.fillMaxWidth()

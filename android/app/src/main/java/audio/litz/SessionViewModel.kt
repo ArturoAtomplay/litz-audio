@@ -12,6 +12,12 @@ import android.os.SystemClock
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import audio.litz.native.Failure
+import audio.litz.native.Pairing
+import audio.litz.native.PairingState
+import audio.litz.native.Route
+import audio.litz.native.Settings
+import audio.litz.native.VoiceSettings
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,7 +45,7 @@ internal data class UiState(
     val session: SessionStatus = SessionStatus(),
     val paired: Boolean = false,
     val desktop: String = "",
-    val message: String? = null,
+    val message: UiText? = null,
     val ready: Boolean = false,
     val fingerprint: String = "",
     val nearby: List<NearbyComputer> = emptyList(),
@@ -191,7 +197,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     private var networkCallbackRegistered = false
     private val pairLifetime = Any()
-    private var pairHandle = 0L
+    private var pairing: Pairing? = null
     private var pairJob: Job? = null
     private var discoveryUpdate = 0
     private val connection =
@@ -202,9 +208,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 collection =
                     viewModelScope.launch {
                         service!!.status.collect { status ->
-                            val enrolled =
-                                runCatching { JSONObject(status.json).optBoolean("enrolled") }
-                                    .getOrDefault(false)
+                            val enrolled = status.status?.enrolled == true
                             mutable.update {
                                 it.copy(
                                     session = status,
@@ -212,7 +216,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                                     settings =
                                         mergePreferences(
                                             if (
-                                                status.json != "{}" ||
+                                                status.status != null ||
                                                     status.pending ||
                                                     status.error != null
                                             )
@@ -233,7 +237,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     it.copy(
                         settings = it.settings.copy(mic = false, playback = false),
                         session = SessionStatus(),
-                        message = "Service stopped; start explicitly to resume",
+                        message = UiText(R.string.message_service_stopped),
                     )
                 }
             }
@@ -321,7 +325,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     mutable.update {
                         it.copy(
                             settings =
-                                if (it.session.json == "{}" && !it.session.pending) preferences
+                                if (it.session.status == null && !it.session.pending) preferences
                                 else it.settings,
                             ready = true,
                             paired = selected != null,
@@ -333,11 +337,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     }
                     reconnectIfIdle()
                 }
-                .onFailure { message(it.message ?: "Could not read settings/identity") }
+                .onFailure { message(it.text()) }
         }
     }
 
-    internal fun message(text: String) {
+    internal fun message(text: UiText) {
         mutable.update { it.copy(message = text) }
     }
 
@@ -359,7 +363,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 mutable.update {
                     it.copy(
                         discovering = false,
-                        message = "Nearby discovery unavailable: ${error.message}",
+                        message = UiText(R.string.discovery_unavailable, listOf(error.reason())),
                     )
                 }
             }
@@ -378,71 +382,64 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 try {
                     service?.disconnectAndWait()
                     val store = IdentityStore(context)
-                    val identity = withContext(Dispatchers.IO) { store.loadOrCreate().toString() }
-                    val name = Build.MODEL.take(64).ifBlank { "Android phone" }
-                    val handle =
-                        withContext(NonCancellable + Dispatchers.IO) {
-                            Native.pairStart(
-                                    identity,
-                                    computer.endpoint,
-                                    computer.fingerprint,
-                                    name,
-                                )
-                                .also { synchronized(pairLifetime) { pairHandle = it } }
+                    val identity = withContext(Dispatchers.IO) { store.phone() }
+                    val name =
+                        Build.MODEL.take(64).ifBlank {
+                            context.getString(R.string.phone_default_name)
                         }
-                    check(handle != 0L) { "Could not start pairing with ${computer.name}" }
+                    val pairing =
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            Pairing(identity, computer.endpoint, computer.fingerprint, name).also {
+                                synchronized(pairLifetime) { this@SessionViewModel.pairing = it }
+                            }
+                        }
                     while (true) {
-                        val result =
-                            withContext(Dispatchers.IO) { JSONObject(Native.pairStatus(handle)) }
-                        when (result.optString("state")) {
-                            "connecting" -> delay(200)
-                            "reviewing" -> {
-                                val code = result.optString("code").ifEmpty { null }
-                                mutable.update { it.copy(pairingCode = code) }
+                        when (val state = withContext(Dispatchers.IO) { pairing.state() }) {
+                            is PairingState.Connecting -> delay(200)
+                            is PairingState.Reviewing -> {
+                                mutable.update { it.copy(pairingCode = state.code) }
                                 delay(200)
                             }
-                            "accepted" -> {
+                            is PairingState.Accepted -> {
                                 withContext(Dispatchers.IO) {
-                                    store.remember(
-                                        computer.name,
-                                        result.getJSONArray("certificate"),
-                                        result.getString("endpoint"),
-                                    )
+                                    store.remember(computer.name, state.certificate, state.endpoint)
                                 }
                                 val saved = withContext(Dispatchers.IO) { store.saved() }
                                 mutable.update {
                                     it.copy(
                                         saved = saved,
-                                        selected = result.getString("fingerprint"),
+                                        selected = state.fingerprint,
                                         paired = true,
                                         desktop = computer.endpoint,
                                         pairing = null,
-                                        message = "Paired with ${computer.name}",
+                                        message =
+                                            UiText(R.string.paired_with, listOf(computer.name)),
                                     )
                                 }
                                 service?.connect()
                                 break
                             }
-                            "cancelled" -> {
-                                message("Pairing cancelled")
+                            is PairingState.Cancelled -> {
+                                message(UiText(R.string.pairing_cancelled))
                                 break
                             }
-                            else -> {
-                                message(result.optString("message", "Pairing failed"))
+                            is PairingState.Failed -> {
+                                message(failureText(state.failure))
                                 break
                             }
                         }
                     }
                 } catch (_: CancellationException) {
-                    message("Pairing cancelled")
+                    message(UiText(R.string.pairing_cancelled))
+                } catch (e: Failure) {
+                    message(failureText(e))
                 } catch (e: Exception) {
-                    message(e.message ?: "Pairing failed")
+                    message(UiText(R.string.pairing_failed, listOf(e.reason())))
                 } finally {
                     withContext(NonCancellable + Dispatchers.IO) {
                         synchronized(pairLifetime) {
-                            val handle = pairHandle
-                            pairHandle = 0L
-                            if (handle != 0L) Native.pairClose(handle)
+                            pairing?.close()
+                            pairing = null
                         }
                     }
                     mutable.update { it.copy(pairing = null, pairingCode = null) }
@@ -452,14 +449,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     }
 
     internal fun cancelPair() {
-        val cancelled =
-            synchronized(pairLifetime) {
-                if (pairHandle == 0L) false
-                else {
-                    Native.pairCancel(pairHandle)
-                    true
-                }
-            }
+        val cancelled = synchronized(pairLifetime) { pairing?.cancel() != null }
         if (!cancelled) pairJob?.cancel()
     }
 
@@ -481,11 +471,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         selected = null,
                         paired = false,
                         settings = it.settings.copy(mic = false, playback = false),
-                        message = "Computer forgotten. Pair again to reconnect.",
+                        message = UiText(R.string.computer_forgotten),
                     )
                 }
             } catch (e: Exception) {
-                message(e.message ?: "Could not forget computer")
+                message(UiText(R.string.computer_forget_failed, listOf(e.reason())))
             } finally {
                 forgetting = false
             }
@@ -508,7 +498,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 }
                 service?.connect()
             } catch (e: Exception) {
-                message(e.message ?: "Could not select computer")
+                message(UiText(R.string.computer_select_failed, listOf(e.reason())))
             }
         }
     }
@@ -531,14 +521,14 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     internal fun connect() {
         lastAttempt = SystemClock.elapsedRealtime()
         mutable.update { it.copy(quiet = false) }
-        service?.connect() ?: message("Service is starting; try Connect again")
+        service?.connect() ?: message(UiText(R.string.message_service_starting))
     }
 
-    internal fun route(revision: Long, route: Any) {
+    internal fun route(revision: ULong, route: Route) {
         service?.route(revision, route)
     }
 
-    internal fun voice(revision: Long, voice: JSONObject) {
+    internal fun voice(revision: ULong, voice: VoiceSettings) {
         service?.voice(revision, voice)
     }
 
@@ -548,7 +538,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun startAuthorized(settings: Settings) {
         if (!mutable.value.paired) {
-            message("Connect to pair first")
+            message(UiText(R.string.message_pair_first))
             return
         }
         mutable.update { it.copy(quiet = false) }
@@ -558,11 +548,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             val intent =
                 Intent(context, SessionService::class.java)
                     .setAction(SessionService.START)
-                    .putExtra("settings", settings.json().toString())
+                    .putExtra("settings", settings.toBundle())
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
             else context.startService(intent)
         } catch (e: Exception) {
-            message(e.message ?: "Foreground start not allowed")
+            message(e.text())
         }
     }
 
@@ -575,7 +565,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         Intent(context, SessionService::class.java).setAction(SessionService.STOP)
                     )
                 }
-                .onFailure { message(it.message ?: "Could not stop the session") }
+                .onFailure { message(it.text()) }
     }
 
     internal fun mute() {

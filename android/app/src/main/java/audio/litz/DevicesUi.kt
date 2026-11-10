@@ -3,6 +3,7 @@ package audio.litz
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -17,27 +18,36 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import audio.litz.native.DesktopRoutes
+import audio.litz.native.Route
+import audio.litz.native.SessionState
+import audio.litz.native.Settings
+import audio.litz.native.VoiceSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 internal val microphoneSources =
     listOf(
-        MicrophoneSource(0, "Automatic", "Recommended for most phones"),
-        MicrophoneSource(1, "Standard microphone", "General recording mode"),
-        MicrophoneSource(7, "Calls and meetings", "Optimized for voice calls"),
-        MicrophoneSource(6, "Speech recognition", "Prioritizes clear speech"),
-        MicrophoneSource(10, "Live performance", "Low latency when supported"),
-        MicrophoneSource(5, "Camera microphone", "Camera recording mode"),
-        MicrophoneSource(9, "Raw microphone", "Less processing when supported"),
+        MicrophoneSource(0, R.string.source_automatic, R.string.source_automatic_description),
+        MicrophoneSource(1, R.string.source_standard, R.string.source_standard_description),
+        MicrophoneSource(7, R.string.source_calls, R.string.source_calls_description),
+        MicrophoneSource(6, R.string.source_speech, R.string.source_speech_description),
+        MicrophoneSource(10, R.string.source_performance, R.string.source_performance_description),
+        MicrophoneSource(5, R.string.source_camera, R.string.source_camera_description),
+        MicrophoneSource(9, R.string.source_raw, R.string.source_raw_description),
     )
 
-internal data class MicrophoneSource(val value: Int, val title: String, val description: String)
+internal data class MicrophoneSource(
+    val value: Int,
+    @StringRes val title: Int,
+    @StringRes val description: Int,
+)
 
 internal fun manualEndpoint(input: String): String? {
     val parts = input.trim().split(':')
@@ -83,9 +93,9 @@ internal fun DevicesApp(
     edit: (Settings) -> Unit,
     apply: () -> Unit,
     forget: () -> Unit,
-    route: (Long, Any) -> Unit = { _, _ -> },
+    route: (ULong, Route) -> Unit = { _, _ -> },
     refreshRoutes: () -> Unit = {},
-    voice: (Long, org.json.JSONObject) -> Unit = { _, _ -> },
+    voice: (ULong, VoiceSettings) -> Unit = { _, _ -> },
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
     BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
@@ -113,17 +123,24 @@ internal fun DevicesApp(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        when (screen) {
-                            Screen.Home -> "Litz"
-                            Screen.Computers -> "Computers"
-                            Screen.Settings -> "Settings"
-                        },
+                        stringResource(
+                            when (screen) {
+                                Screen.Home -> R.string.app_short_name
+                                Screen.Computers -> R.string.screen_computers
+                                Screen.Settings -> R.string.screen_settings
+                            }
+                        ),
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.headlineSmall,
                     )
                     if (screen == Screen.Home)
-                        TextButton(onClick = { screen = Screen.Settings }) { Text("Settings") }
-                    else TextButton(onClick = { screen = Screen.Home }) { Text("Done") }
+                        TextButton(onClick = { screen = Screen.Settings }) {
+                            Text(stringResource(R.string.screen_settings))
+                        }
+                    else
+                        TextButton(onClick = { screen = Screen.Home }) {
+                            Text(stringResource(R.string.action_done))
+                        }
                 }
             }
         },
@@ -138,14 +155,17 @@ internal fun DevicesApp(
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                ui.message?.takeUnless { it == ui.session.error }?.let { Notice(it) }
-                error?.let { Notice(it, error = true) }
+                ui.message?.takeUnless { it == ui.session.error }?.let { Notice(it.resolve()) }
+                error?.let { Notice(it.resolve(), error = true) }
                 when (screen) {
                     Screen.Home ->
                         if (selected == null) {
-                            Text("Add your computer", style = MaterialTheme.typography.titleLarge)
                             Text(
-                                "Install Litz on your computer and connect both devices to the same network. Then pick your computer below.",
+                                stringResource(R.string.home_add_title),
+                                style = MaterialTheme.typography.titleLarge,
+                            )
+                            Text(
+                                stringResource(R.string.home_add_body),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -177,17 +197,28 @@ internal fun DevicesApp(
                     Screen.Computers -> {
                         val others = ui.saved.filter { it.fingerprint != ui.selected }
                         if (selected != null || others.isNotEmpty()) {
-                            Text("Your computers", style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                stringResource(R.string.computers_yours),
+                                style = MaterialTheme.typography.titleLarge,
+                            )
                             selected?.let {
                                 OutlinedCard(
                                     Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(24.dp),
                                 ) {
-                                    SettingValue(it.name, "Using now", enabled = false)
+                                    SettingValue(
+                                        it.name,
+                                        stringResource(R.string.computer_using_now),
+                                        enabled = false,
+                                    )
                                 }
                             }
                             others.forEach { computer ->
-                                ChoiceCard(computer.name, "Tap to switch", enabled = !busy) {
+                                ChoiceCard(
+                                    computer.name,
+                                    stringResource(R.string.computer_tap_to_switch),
+                                    enabled = !busy,
+                                ) {
                                     select(computer)
                                 }
                             }
@@ -214,7 +245,7 @@ private fun ComputerCard(
 ) {
     val nearby = ui.nearby.firstOrNull { it.fingerprint == computer.fingerprint }
     val connecting =
-        status.state == "Reconnecting" ||
+        status.state == SessionState.RECONNECTING ||
             (ui.session.pending && !status.connected && (!ui.quiet || nearby != null))
     val usb by
         produceState(false, status.endpoint) {
@@ -228,15 +259,19 @@ private fun ComputerCard(
     val (line, color) =
         when {
             status.revoked && !status.connected ->
-                "This computer no longer trusts this phone" to MaterialTheme.colorScheme.error
-            status.inUse -> "In use by ${status.owner}" to MaterialTheme.colorScheme.tertiary
+                stringResource(R.string.status_revoked) to MaterialTheme.colorScheme.error
+            status.inUse ->
+                stringResource(R.string.status_in_use, status.owner.orEmpty()) to
+                    MaterialTheme.colorScheme.tertiary
             status.connected ->
-                (if (usb) "Connected over USB" else "Connected") to
-                    MaterialTheme.colorScheme.primary
-            connecting -> "Connecting…" to MaterialTheme.colorScheme.tertiary
+                stringResource(
+                    if (usb) R.string.status_connected_usb else R.string.status_connected
+                ) to MaterialTheme.colorScheme.primary
+            connecting ->
+                stringResource(R.string.status_connecting) to MaterialTheme.colorScheme.tertiary
             nearby != null && ui.session.error != null ->
-                "Found on your network, but not answering" to MaterialTheme.colorScheme.outline
-            else -> "Offline" to MaterialTheme.colorScheme.outline
+                stringResource(R.string.status_not_answering) to MaterialTheme.colorScheme.outline
+            else -> stringResource(R.string.status_offline) to MaterialTheme.colorScheme.outline
         }
     var menu by remember { mutableStateOf(false) }
     var confirmForget by remember { mutableStateOf(false) }
@@ -255,11 +290,14 @@ private fun ComputerCard(
                 )
                 Box {
                     IconButton(onClick = { menu = true }) {
-                        Icon(painterResource(R.drawable.ic_more), contentDescription = "More")
+                        Icon(
+                            painterResource(R.drawable.ic_more),
+                            contentDescription = stringResource(R.string.action_more),
+                        )
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(
-                            text = { Text("Change computer") },
+                            text = { Text(stringResource(R.string.computer_change)) },
                             enabled = !busy,
                             onClick = {
                                 menu = false
@@ -269,7 +307,7 @@ private fun ComputerCard(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    "Forget this computer",
+                                    stringResource(R.string.computer_forget),
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             },
@@ -293,10 +331,9 @@ private fun ComputerCard(
             if (!status.connected && !connecting) {
                 Text(
                     when {
-                        status.revoked -> "Pair again to use it with this phone."
-                        nearby != null ->
-                            "Make sure your computer's firewall allows Litz on UDP port 47165."
-                        else -> "Litz connects on its own when ${computer.name} is on."
+                        status.revoked -> stringResource(R.string.hint_pair_again)
+                        nearby != null -> stringResource(R.string.hint_firewall)
+                        else -> stringResource(R.string.hint_connects_by_itself, computer.name)
                     },
                     Modifier.padding(top = 8.dp, end = 12.dp),
                     style = MaterialTheme.typography.bodySmall,
@@ -306,10 +343,13 @@ private fun ComputerCard(
                     if (status.revoked)
                         nearby?.let {
                             Button(onClick = { pairAgain(it) }, enabled = !busy) {
-                                Text("Pair again")
+                                Text(stringResource(R.string.action_pair_again))
                             }
                         }
-                    else Button(onClick = connect, enabled = !busy) { Text("Try again") }
+                    else
+                        Button(onClick = connect, enabled = !busy) {
+                            Text(stringResource(R.string.action_try_again))
+                        }
                 }
             }
         }
@@ -318,8 +358,8 @@ private fun ComputerCard(
         AlertDialog(
             containerColor = MaterialTheme.colorScheme.surface,
             onDismissRequest = { confirmForget = false },
-            title = { Text("Forget ${computer.name}?") },
-            text = { Text("To use it again, pair it from the Computers screen.") },
+            title = { Text(stringResource(R.string.computer_forget_title, computer.name)) },
+            text = { Text(stringResource(R.string.computer_forget_body)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -327,10 +367,17 @@ private fun ComputerCard(
                         forget()
                     }
                 ) {
-                    Text("Forget", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        stringResource(R.string.action_forget),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             },
-            dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { confirmForget = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
         )
 }
 
@@ -348,51 +395,57 @@ private fun AddComputer(
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 LitzBars(Modifier.size(width = 54.dp, height = 40.dp))
-                Text("Pairing with ${ui.pairing}", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    stringResource(R.string.pairing_with, ui.pairing),
+                    style = MaterialTheme.typography.titleLarge,
+                )
                 val code = ui.pairingCode
                 if (code == null) {
-                    Text("Waiting for your computer…")
+                    Text(stringResource(R.string.pairing_waiting))
                 } else {
-                    Text("Allow the connection on your computer if it shows:")
+                    Text(stringResource(R.string.pairing_allow_if_shows))
                     Text(code, style = MaterialTheme.typography.displaySmall)
-                    Text("If the codes differ, cancel.")
+                    Text(stringResource(R.string.pairing_codes_differ))
                 }
-                TextButton(onClick = cancelPair) { Text("Cancel") }
+                TextButton(onClick = cancelPair) { Text(stringResource(R.string.action_cancel)) }
             }
         }
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("Nearby", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-        TextButton(onClick = refresh, enabled = !busy) { Text("Refresh") }
+        Text(
+            stringResource(R.string.nearby),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = refresh, enabled = !busy) {
+            Text(stringResource(R.string.action_refresh))
+        }
     }
     val nearby = ui.nearby.filter { n -> ui.saved.none { it.fingerprint == n.fingerprint } }
     if (nearby.isEmpty())
         Text(
-            if (ui.discovering) "Looking for computers running Litz…"
-            else "No computers found. Tap Refresh to look again.",
+            stringResource(if (ui.discovering) R.string.nearby_looking else R.string.nearby_none),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     nearby.forEach { computer ->
-        ChoiceCard(computer.name, "Tap to pair", enabled = !busy) { candidate = computer }
+        ChoiceCard(computer.name, stringResource(R.string.nearby_tap_to_pair), enabled = !busy) {
+            candidate = computer
+        }
     }
     OutlinedButton(
         onClick = { manualDialog = true },
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("Pair by IP address")
+        Text(stringResource(R.string.pair_by_ip))
     }
     candidate?.let { computer ->
         AlertDialog(
             containerColor = MaterialTheme.colorScheme.surface,
             onDismissRequest = { candidate = null },
-            title = { Text("Pair with ${computer.name}?") },
-            text = {
-                Text(
-                    "Tap Pair, then allow the connection on ${computer.name}. You only do this once."
-                )
-            },
+            title = { Text(stringResource(R.string.pair_with_title, computer.name)) },
+            text = { Text(stringResource(R.string.pair_with_body, computer.name)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -401,10 +454,14 @@ private fun AddComputer(
                     },
                     enabled = !busy,
                 ) {
-                    Text("Pair")
+                    Text(stringResource(R.string.action_pair))
                 }
             },
-            dismissButton = { TextButton(onClick = { candidate = null }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { candidate = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
         )
     }
     if (manualDialog) ManualPairDialog(dismiss = { manualDialog = false }, pair = pair)
@@ -415,18 +472,17 @@ private fun ManualPairDialog(dismiss: () -> Unit, pair: (NearbyComputer) -> Unit
     var address by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     val endpoint = manualEndpoint(address)
+    val defaultName = stringResource(R.string.computer_default_name)
     AlertDialog(
         onDismissRequest = dismiss,
-        title = { Text("Pair by IP address") },
+        title = { Text(stringResource(R.string.pair_by_ip)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Enter the computer's local IPv4 address. Litz verifies the computer's identity before saving it."
-                )
+                Text(stringResource(R.string.pair_by_ip_body))
                 OutlinedTextField(
                     value = address,
                     onValueChange = { address = it.take(21) },
-                    label = { Text("IP address") },
+                    label = { Text(stringResource(R.string.ip_address)) },
                     placeholder = { Text("192.168.1.10") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -434,7 +490,7 @@ private fun ManualPairDialog(dismiss: () -> Unit, pair: (NearbyComputer) -> Unit
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.take(64) },
-                    label = { Text("Computer name (optional)") },
+                    label = { Text(stringResource(R.string.computer_name_optional)) },
                     singleLine = true,
                 )
             }
@@ -442,15 +498,17 @@ private fun ManualPairDialog(dismiss: () -> Unit, pair: (NearbyComputer) -> Unit
         confirmButton = {
             TextButton(
                 onClick = {
-                    pair(NearbyComputer(name.trim().ifEmpty { "Computer" }, "", endpoint!!))
+                    pair(NearbyComputer(name.trim().ifEmpty { defaultName }, "", endpoint!!))
                     dismiss()
                 },
                 enabled = endpoint != null,
             ) {
-                Text("Pair")
+                Text(stringResource(R.string.action_pair))
             }
         },
-        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = dismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
     )
 }
 
@@ -464,8 +522,8 @@ private fun MicrophoneCard(
 ) {
     val takeover = status.generation.takeIf { status.inUse }
     DirectionCard(
-        "Microphone",
-        "Use your phone as a microphone",
+        stringResource(R.string.microphone),
+        stringResource(R.string.microphone_description),
         settings.mic,
         status.error(0),
         busy,
@@ -476,8 +534,8 @@ private fun MicrophoneCard(
         },
     ) {
         SettingRow(
-            "Mute",
-            if (settings.muted) "Your computer hears silence" else null,
+            stringResource(R.string.mute),
+            if (settings.muted) stringResource(R.string.mute_description) else null,
             enabled = !busy && takeover == null,
             onClick = { start(settings.copy(muted = !settings.muted)) },
         ) {
@@ -499,13 +557,14 @@ private fun ListenCard(
     start: (Settings) -> Unit,
     edit: (Settings) -> Unit,
     apply: () -> Unit,
-    route: (Long, Any) -> Unit,
+    route: (ULong, Route) -> Unit,
     refreshRoutes: () -> Unit,
 ) {
     val takeover = status.generation.takeIf { status.inUse }
+    val listeningVolume = stringResource(R.string.volume_listening)
     DirectionCard(
-        "Listen",
-        "Hear your computer on your phone",
+        stringResource(R.string.listen),
+        stringResource(R.string.listen_description),
         settings.playback,
         status.error(1),
         busy,
@@ -515,9 +574,13 @@ private fun ListenCard(
     ) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
             Row(Modifier.fillMaxWidth()) {
-                Text("Volume", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${(settings.playbackGain * 100).toInt()}%",
+                    stringResource(R.string.volume),
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    stringResource(R.string.volume_percent, (settings.playbackGain * 100).toInt()),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -527,11 +590,11 @@ private fun ListenCard(
                 onValueChange = { edit(settings.copy(playbackGain = it)) },
                 valueRange = 0f..2f,
                 enabled = !busy && !status.inUse,
-                modifier = Modifier.semantics { contentDescription = "Listening volume" },
+                modifier = Modifier.semantics { contentDescription = listeningVolume },
                 onValueChangeFinished = apply,
             )
             Text(
-                "Above 100% boosts quiet audio.",
+                stringResource(R.string.volume_boost_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -550,7 +613,7 @@ private fun DirectionCard(
     title: String,
     description: String,
     on: Boolean,
-    error: String?,
+    error: UiText?,
     busy: Boolean,
     toggle: (Boolean) -> Unit,
     details: @Composable ColumnScope.() -> Unit,
@@ -586,7 +649,7 @@ private fun DirectionCard(
             }
             error?.let {
                 Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Notice(it, error = true)
+                    Notice(it.resolve(), error = true)
                 }
             }
         }
@@ -595,15 +658,15 @@ private fun DirectionCard(
 
 @Composable
 private fun ComputerOutput(
-    routes: JSONObject?,
+    routes: DesktopRoutes?,
     enabled: Boolean,
-    route: (Long, Any) -> Unit,
+    route: (ULong, Route) -> Unit,
     refresh: () -> Unit,
 ) {
     var outputs by remember { mutableStateOf(false) }
     SettingRow(
-        "Sound from",
-        routes?.let { routeDescription(it.opt("effective"), it) } ?: "Unavailable",
+        stringResource(R.string.sound_from),
+        routes?.let { routeDescription(it.effective, it) } ?: stringResource(R.string.unavailable),
         enabled = enabled && routes != null,
         onClick = {
             refresh()
@@ -611,34 +674,27 @@ private fun ComputerOutput(
         },
     )
     if (outputs && routes != null) {
-        val mirror = routes.optJSONObject("effective")?.optJSONObject("Mirror")
+        val mirror = routes.effective as? Route.Mirror
         fun choose(name: String?) {
-            route(
-                routes.getLong("revision"),
-                JSONObject().put("Mirror", JSONObject().put("name", name ?: JSONObject.NULL)),
-            )
+            route(routes.revision, Route.Mirror(name))
             outputs = false
         }
-        AudioChoiceSheet("Sound from", dismiss = { outputs = false }) {
+        AudioChoiceSheet(stringResource(R.string.sound_from), dismiss = { outputs = false }) {
             AudioChoiceRow(
-                "Default output",
-                selected = mirror?.isNull("name") == true,
+                stringResource(R.string.output_default),
+                selected = mirror != null && mirror.name == null,
                 enabled = enabled,
-                description = "Follows your computer when it changes output",
+                description = stringResource(R.string.output_default_description),
             ) {
                 choose(null)
             }
-            routes.optJSONArray("endpoints")?.let { endpoints ->
-                for (i in 0 until endpoints.length()) {
-                    val device = endpoints.getJSONObject(i)
-                    val name = device.getString("name")
-                    AudioChoiceRow(
-                        device.getString("label"),
-                        selected = mirror?.optString("name") == name,
-                        enabled = enabled,
-                    ) {
-                        choose(name)
-                    }
+            routes.endpoints.forEach { endpoint ->
+                AudioChoiceRow(
+                    endpoint.label,
+                    selected = mirror?.name == endpoint.name,
+                    enabled = enabled,
+                ) {
+                    choose(endpoint.name)
                 }
             }
         }
@@ -652,28 +708,29 @@ private fun SettingsScreen(
     busy: Boolean,
     edit: (Settings) -> Unit,
     apply: () -> Unit,
-    voice: (Long, JSONObject) -> Unit,
+    voice: (ULong, VoiceSettings) -> Unit,
 ) {
     var sources by remember { mutableStateOf(false) }
-    SectionHeader("Phone microphone")
+    val context = LocalContext.current
+    SectionHeader(stringResource(R.string.settings_phone_microphone))
     OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(vertical = 6.dp)) {
             SettingRow(
-                "Recording mode",
-                recordingModeDescription(ui.settings.source, status),
+                stringResource(R.string.recording_mode),
+                recordingModeDescription(context, ui.settings.source, status),
                 enabled = !busy,
                 onClick = { sources = true },
             )
         }
     }
     if (sources)
-        AudioChoiceSheet("Recording mode", dismiss = { sources = false }) {
+        AudioChoiceSheet(stringResource(R.string.recording_mode), dismiss = { sources = false }) {
             microphoneSources.forEach { source ->
                 AudioChoiceRow(
-                    source.title,
+                    stringResource(source.title),
                     selected = ui.settings.source == source.value,
                     enabled = !busy,
-                    description = source.description,
+                    description = stringResource(source.description),
                 ) {
                     edit(ui.settings.copy(source = source.value))
                     apply()
@@ -681,15 +738,15 @@ private fun SettingsScreen(
                 }
             }
         }
-    SectionHeader("Voice processing on your computer")
-    voiceRuntimeDescription(status)?.let { Notice(it) }
-    val saved = status.routes?.optJSONObject("voice")
-    if (saved == null)
+    SectionHeader(stringResource(R.string.voice_header))
+    voiceRuntimeDescription(status)?.let { Notice(it.resolve()) }
+    val routes = status.routes
+    if (routes == null)
         OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
             Column(Modifier.padding(vertical = 6.dp)) {
                 SettingRow(
-                    "Not connected",
-                    "Connect to your computer to adjust voice processing.",
+                    stringResource(R.string.voice_not_connected),
+                    stringResource(R.string.voice_connect_hint),
                     enabled = false,
                 )
             }
@@ -697,45 +754,43 @@ private fun SettingsScreen(
     else
         VoiceControls(
             ui.selected,
-            status.routes.getLong("revision"),
-            VoicePreferences.from(saved),
+            routes.revision,
+            VoicePreferences.from(routes.voice),
             enabled = !busy && !status.inUse && status.connected,
-            supported =
-                remember(status.routes.optJSONArray("suppression_algorithms")?.toString()) {
-                    status.routes.optJSONArray("suppression_algorithms")?.let { values ->
-                        (0 until values.length()).map { values.getString(it) }
-                    } ?: emptyList()
-                },
+            supported = routes.suppressionAlgorithms,
             failure = ui.session.error,
             inputRms = status.microphoneRms,
             apply = voice,
         )
-    SectionHeader("About")
+    SectionHeader(stringResource(R.string.about))
     val uriHandler = LocalUriHandler.current
-    val context = LocalContext.current
     var details by rememberSaveable { mutableStateOf(false) }
     OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(vertical = 6.dp)) {
-            SettingRow("Litz ${BuildConfig.VERSION_NAME}", "Free software, GNU GPL 3.0 or later")
             SettingRow(
-                "Source code",
+                stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
+                stringResource(R.string.about_license),
+            )
+            SettingRow(
+                stringResource(R.string.source_code),
                 "github.com/ArturoAtomplay/litz-audio",
                 onClick = { uriHandler.openUri(SOURCE_URL) },
             )
             StoreOptions()
             SettingRow(
-                "Diagnostics",
-                "Details to include in a bug report",
+                stringResource(R.string.diagnostics),
+                stringResource(R.string.diagnostics_description),
                 onClick = { details = !details },
             ) {
                 Text(
-                    if (details) "Hide" else "Show",
+                    stringResource(if (details) R.string.action_hide else R.string.action_show),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
             if (details) {
-                val sections = diagnostics(ui, status)
+                val sections = diagnostics(context, ui, status)
+                val clipLabel = stringResource(R.string.diagnostics)
                 Surface(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     shape = RoundedCornerShape(16.dp),
@@ -777,12 +832,12 @@ private fun SettingsScreen(
                         context
                             .getSystemService(ClipboardManager::class.java)
                             .setPrimaryClip(
-                                ClipData.newPlainText("Litz diagnostics", diagnosticText(sections))
+                                ClipData.newPlainText(clipLabel, diagnosticText(sections))
                             )
                     },
                     modifier = Modifier.padding(horizontal = 8.dp),
                 ) {
-                    Text("Copy report")
+                    Text(stringResource(R.string.diagnostics_copy))
                 }
             }
         }

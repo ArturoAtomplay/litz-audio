@@ -2,7 +2,6 @@ use litz_core::media::receiver::{CHUNK, Receiver};
 use litz_core::protocol::MAX_DATAGRAM;
 use litz_core::wake::{Wake, WakeListener};
 use rtrb::{Consumer, Producer, RingBuffer};
-use serde::Serialize;
 use std::{
     cell::UnsafeCell,
     ffi::c_void,
@@ -126,8 +125,8 @@ impl Bridge {
 }
 
 #[repr(C)]
-#[derive(Default, Serialize)]
-pub struct Info {
+#[derive(Clone, Copy, Debug, Default, uniffi::Record)]
+pub struct AudioInfo {
     pub input_rate: i32,
     pub output_rate: i32,
     pub input_device: i32,
@@ -154,12 +153,12 @@ unsafe extern "C" {
         source: i32,
     ) -> *mut c_void;
     fn litz_audio_start(audio: *mut c_void) -> i32;
-    fn litz_audio_info(audio: *mut c_void, info: *mut Info);
+    fn litz_audio_info(audio: *mut c_void, info: *mut AudioInfo);
     fn litz_audio_close(audio: *mut c_void);
 }
 
-#[derive(Default)]
-pub struct Listening {
+#[derive(Clone, Copy, Debug, Default, uniffi::Record)]
+pub struct ListeningStats {
     pub buffer_ms: f64,
     pub late: u64,
     pub concealed: u64,
@@ -199,7 +198,7 @@ impl Audio {
             std::ptr::null_mut::<c_void>()
         };
         if native.is_null() {
-            return Err("Oboe open failed: unsupported format/rate or unavailable device; no route fallback".into());
+            return Err(crate::failure::Failure::AudioUnavailable.into());
         }
         Ok(Self {
             native,
@@ -213,7 +212,7 @@ impl Audio {
         #[cfg(target_os = "android")]
         // SAFETY: native is a live handle returned by litz_audio_open and owned by Self.
         if unsafe { litz_audio_start(self.native) } != 0 {
-            return Err("Oboe start failed".into());
+            return Err(crate::failure::Failure::AudioUnavailable.into());
         }
         Ok(())
     }
@@ -252,8 +251,8 @@ impl Audio {
     pub fn collect(&mut self) {
         while self.ends.retired.pop().is_ok() {}
     }
-    pub fn listening(&self) -> Listening {
-        Listening {
+    pub fn listening(&self) -> ListeningStats {
+        ListeningStats {
             buffer_ms: self.bridge.buffer_us.load(Ordering::Relaxed) as f64 / 1000.0,
             late: self.bridge.late.load(Ordering::Relaxed),
             concealed: self.bridge.concealed.load(Ordering::Relaxed),
@@ -262,10 +261,10 @@ impl Audio {
     pub fn callback_frames(&self) -> u64 {
         self.bridge.callback_frames.load(Ordering::Relaxed)
     }
-    pub fn info(&self) -> Info {
-        let mut info = Info::default();
+    pub fn info(&self) -> AudioInfo {
+        let mut info = AudioInfo::default();
         #[cfg(target_os = "android")]
-        // SAFETY: native remains live for Self; C++ writes only the provided Info.
+        // SAFETY: native remains live for Self; C++ writes only the provided AudioInfo.
         unsafe {
             litz_audio_info(self.native, &mut info);
         }

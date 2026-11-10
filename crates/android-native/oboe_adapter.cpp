@@ -2,12 +2,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <jni.h>
 #include <memory>
 #include <oboe/FullDuplexStream.h>
 #include <oboe/Oboe.h>
 
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *, void *) { return JNI_VERSION_1_6; }
 struct Faults {
     std::atomic<int> error{0};
 };
@@ -217,19 +215,4 @@ extern "C" void litz_audio_info(LitzAudio *a, LitzAudioInfo *i) {
          i->input_buffer, i->input_xruns);
     fill(a->output, i->output_rate, i->output_device, i->output_exclusive, i->output_low_latency,
          i->output_buffer, i->output_xruns);
-}
-extern "C" int litz_jni_length(void *e, void *s) {
-    return static_cast<JNIEnv *>(e)->GetStringLength(static_cast<jstring>(s));
-}
-extern "C" int litz_jni_exception(void *e) {
-    return static_cast<JNIEnv *>(e)->ExceptionCheck() ? 1 : 0;
-}
-extern "C" const uint16_t *litz_jni_chars(void *e, void *s) {
-    return static_cast<JNIEnv *>(e)->GetStringChars(static_cast<jstring>(s), nullptr);
-}
-extern "C" void litz_jni_release(void *e, void *s, const uint16_t *c) {
-    static_cast<JNIEnv *>(e)->ReleaseStringChars(static_cast<jstring>(s), c);
-}
-extern "C" void *litz_jni_string(void *e, const uint16_t *s, int length) {
-    return static_cast<JNIEnv *>(e)->NewString(s, length);
 }

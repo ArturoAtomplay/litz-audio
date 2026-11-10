@@ -1,67 +1,49 @@
 package audio.litz
 
 import android.content.Context
-import androidx.compose.runtime.Immutable
+import android.os.Bundle
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import audio.litz.native.Settings
 import kotlinx.coroutines.flow.first
-import org.json.JSONObject
 
 private val Context.preferences by preferencesDataStore("preferences")
 
-@Immutable
-internal data class Settings(
-    val mic: Boolean = false,
-    val playback: Boolean = false,
-    val muted: Boolean = false,
-    val micGain: Float = 1f,
-    val playbackGain: Float = 1f,
-    val input: Int = 0,
-    val output: Int = 0,
-    val reconnect: Boolean = true,
-    val source: Int = 0,
-    val takeover: Long? = null,
-    val rawSupported: Boolean = false,
-    val headsetIds: List<Int> = emptyList(),
-) {
-    fun json() =
-        JSONObject()
-            .put("mic", mic)
-            .put("playback", playback)
-            .put("muted", muted)
-            .put("mic_gain", micGain)
-            .put("playback_gain", playbackGain)
-            .put("takeover", takeover ?: JSONObject.NULL)
-            .put("raw_supported", rawSupported)
-            .put("headset_ids", org.json.JSONArray(headsetIds))
-            .put("source", source)
-            .put("input", input)
-            .put("output", output)
-            .put("reconnect", reconnect)
-
-    companion object {
-        fun from(j: JSONObject) =
-            Settings(
-                j.getBoolean("mic"),
-                j.getBoolean("playback"),
-                j.getBoolean("muted"),
-                j.getDouble("mic_gain").toFloat(),
-                j.getDouble("playback_gain").toFloat(),
-                j.getInt("input"),
-                j.getInt("output"),
-                j.getBoolean("reconnect"),
-                j.optInt("source", 0),
-                if (j.isNull("takeover")) null else j.getLong("takeover"),
-                j.optBoolean("raw_supported"),
-                j.optJSONArray("headset_ids")?.let { a ->
-                    (0 until a.length()).map { a.getInt(it) }
-                } ?: emptyList(),
-            )
+internal fun Settings.toBundle(): Bundle =
+    Bundle().apply {
+        putBoolean("mic", mic)
+        putBoolean("playback", playback)
+        putBoolean("muted", muted)
+        putFloat("mic_gain", micGain)
+        putFloat("playback_gain", playbackGain)
+        putInt("input", input)
+        putInt("source", source)
+        putInt("output", output)
+        putBoolean("reconnect", reconnect)
+        takeover?.let { putLong("takeover", it.toLong()) }
+        putBoolean("raw_supported", rawSupported)
+        putIntArray("headset_ids", headsetIds.toIntArray())
     }
-}
+
+internal fun settingsFrom(bundle: Bundle): Settings =
+    Settings(
+        mic = bundle.getBoolean("mic"),
+        playback = bundle.getBoolean("playback"),
+        muted = bundle.getBoolean("muted"),
+        micGain = bundle.getFloat("mic_gain", 1f),
+        playbackGain = bundle.getFloat("playback_gain", 1f),
+        input = bundle.getInt("input"),
+        source = bundle.getInt("source"),
+        output = bundle.getInt("output"),
+        reconnect = bundle.getBoolean("reconnect", true),
+        takeover =
+            if (bundle.containsKey("takeover")) bundle.getLong("takeover").toULong() else null,
+        rawSupported = bundle.getBoolean("raw_supported"),
+        headsetIds = bundle.getIntArray("headset_ids")?.toList().orEmpty(),
+    )
 
 internal fun Settings.changesAudioPath(next: Settings): Boolean =
     mic != next.mic ||

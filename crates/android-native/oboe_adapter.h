@@ -15,9 +15,4 @@ void litz_audio_info(LitzAudio *audio, LitzAudioInfo *info);
 void litz_audio_close(LitzAudio *audio);
 void litz_capture(void *bridge, const float *samples, int frames);
 void litz_render(void *bridge, float *samples, int frames);
-int litz_jni_length(void *env, void *text);
-int litz_jni_exception(void *env);
-const uint16_t *litz_jni_chars(void *env, void *text);
-void litz_jni_release(void *env, void *text, const uint16_t *chars);
-void *litz_jni_string(void *env, const uint16_t *text, int length);
 }

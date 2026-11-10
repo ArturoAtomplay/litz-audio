@@ -1,4 +1,5 @@
 use crate::Identity;
+use crate::failure::Failure;
 use litz_core::{
     protocol::{DeviceId, Message, PairOutcome, Record},
     session::{commitment, fingerprint, verification_code},
@@ -12,19 +13,43 @@ use std::{
 };
 use tokio::sync::Notify;
 
+#[derive(Clone, Debug, PartialEq, uniffi::Enum)]
+pub enum PairingState {
+    Connecting,
+    /// Both screens show `code` while the computer asks the person.
+    Reviewing {
+        code: String,
+    },
+    Accepted {
+        certificate: Vec<u8>,
+        endpoint: SocketAddr,
+        fingerprint: String,
+    },
+    Cancelled,
+    Failed {
+        failure: Failure,
+    },
+}
+
+#[derive(uniffi::Object)]
 pub struct Pairing {
-    status: Arc<Mutex<String>>,
+    state: Arc<Mutex<PairingState>>,
     cancel: Arc<Notify>,
     worker: Option<JoinHandle<()>>,
 }
 
+#[uniffi::export]
 impl Pairing {
-    pub fn start(
+    #[uniffi::constructor]
+    pub fn new(
         identity: Identity,
         address: SocketAddr,
         expected: String,
         name: String,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Arc<Self>, Failure> {
+        let invalid = |detail: &str| Failure::Internal {
+            detail: detail.into(),
+        };
         if address.ip().is_unspecified()
             || address.ip().is_multicast()
             || address.port() < 1024
@@ -35,53 +60,50 @@ impl Pairing {
             || identity.certificate.is_empty()
             || identity.private_key.is_empty()
         {
-            return Err("invalid pairing candidate or identity".into());
+            return Err(invalid("invalid pairing candidate or identity"));
         }
-        let status = Arc::new(Mutex::new(
-            serde_json::json!({"state":"connecting"}).to_string(),
-        ));
+        let state = Arc::new(Mutex::new(PairingState::Connecting));
         let cancel = Arc::new(Notify::new());
-        let worker_status = status.clone();
+        let worker_state = state.clone();
         let worker_cancel = cancel.clone();
         let worker = std::thread::Builder::new()
             .name("litz-pairing".into())
             .spawn(move || {
-                let result = (|| -> Result<String> {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()?;
-                    runtime.block_on(pair(
-                        identity,
-                        address,
-                        expected,
-                        name,
-                        worker_status.clone(),
-                        worker_cancel,
-                    ))
-                })();
-                if let Ok(mut state) = worker_status.lock() {
-                    *state = result.unwrap_or_else(|e| {
-                        serde_json::json!({"state":"error","message":e.to_string()}).to_string()
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(transport::Error::from)
+                    .and_then(|runtime| {
+                        runtime.block_on(pair(
+                            identity,
+                            address,
+                            expected,
+                            name,
+                            worker_state.clone(),
+                            worker_cancel,
+                        ))
                     });
-                }
-            })?;
-        Ok(Self {
-            status,
+                *worker_state.lock().unwrap() = result.unwrap_or_else(|e| PairingState::Failed {
+                    failure: Failure::of(e.as_ref()),
+                });
+            })
+            .map_err(|error| Failure::of(&error))?;
+        Ok(Arc::new(Self {
+            state,
             cancel,
             worker: Some(worker),
-        })
+        }))
     }
-    pub fn status(&self) -> Result<String> {
-        Ok(self
-            .status
-            .lock()
-            .map_err(|_| "pairing status unavailable")?
-            .clone())
+
+    pub fn state(&self) -> PairingState {
+        self.state.lock().unwrap().clone()
     }
+
     pub fn cancel(&self) {
         self.cancel.notify_one();
     }
 }
+
 impl Drop for Pairing {
     fn drop(&mut self) {
         self.cancel();
@@ -96,9 +118,9 @@ async fn pair(
     address: SocketAddr,
     expected: String,
     name: String,
-    status: Arc<Mutex<String>>,
+    state: Arc<Mutex<PairingState>>,
     cancel: Arc<Notify>,
-) -> Result<String> {
+) -> Result<PairingState> {
     let bind = if address.is_ipv4() {
         "0.0.0.0:0"
     } else {
@@ -110,8 +132,8 @@ async fn pair(
         identity.private_key,
     )?);
     let result = tokio::select! {
-        _ = cancel.notified() => Ok(serde_json::json!({"state": "cancelled"}).to_string()),
-        result = exchange(&endpoint, &identity.certificate, address, &expected, name, &status) => result,
+        _ = cancel.notified() => Ok(PairingState::Cancelled),
+        result = exchange(&endpoint, &identity.certificate, address, &expected, name, &state) => result,
     };
     // The runtime ends with this call; without waiting, CLOSE is never sent and
     // the computer keeps prompting for a phone that already gave up.
@@ -126,17 +148,18 @@ async fn exchange(
     address: SocketAddr,
     expected: &str,
     name: String,
-    status: &Mutex<String>,
-) -> Result<String> {
+    state: &Mutex<PairingState>,
+) -> Result<PairingState> {
     let connection = tokio::time::timeout(
         Duration::from_secs(5),
         endpoint.connect(address, "litz.local")?,
     )
-    .await??;
+    .await
+    .map_err(|_| Failure::ConnectTimeout)??;
     let desktop = transport::peer_certificate(&connection)?;
     let actual = fingerprint(&desktop).to_string();
     if !expected.is_empty() && actual != expected.to_ascii_lowercase() {
-        return Err("discovered computer identity changed".into());
+        return Err(Failure::IdentityChanged.into());
     }
     let mut id = [0u8; 16];
     let mut nonce = [0u8; 32];
@@ -155,15 +178,13 @@ async fn exchange(
         nonce: desktop_nonce,
     } = reply.message
     else {
-        return Err("Pairing unavailable; try again shortly".into());
+        return Err(Failure::PairingUnavailable.into());
     };
     control
         .write(&Record::new(1, Message::PairReveal { nonce }))
         .await?;
     let code = verification_code(phone, &desktop, &nonce, &desktop_nonce);
-    if let Ok(mut status) = status.lock() {
-        *status = serde_json::json!({"state": "reviewing", "code": code}).to_string();
-    }
+    *state.lock().unwrap() = PairingState::Reviewing { code };
     let approval = litz_core::protocol::APPROVAL_WINDOW + Duration::from_secs(10);
     let reply = tokio::time::timeout(approval, control.read()).await??;
     let outcome = match reply {
@@ -176,21 +197,18 @@ async fn exchange(
                 },
             ..
         } if received == id => outcome,
-        _ => return Err("Pairing unavailable; try again shortly".into()),
+        _ => return Err(Failure::PairingUnavailable.into()),
     };
     match outcome {
-        PairOutcome::Accepted => Ok(serde_json::json!({
-            "state": "accepted",
-            "certificate": desktop,
-            "endpoint": address.to_string(),
-            "fingerprint": actual,
-        }).to_string()),
-        PairOutcome::Declined => Err("The computer declined the pairing request".into()),
-        PairOutcome::Full => {
-            Err("The computer declined: all its pairing slots are in use".into())
-        }
-        PairOutcome::Unavailable => Err("The computer could not show the pairing prompt. Turn on notifications for Litz Audio on the computer, then try again.".into()),
-        PairOutcome::Cancelled => Err("Pairing unavailable; try again shortly".into()),
+        PairOutcome::Accepted => Ok(PairingState::Accepted {
+            certificate: desktop,
+            endpoint: address,
+            fingerprint: actual,
+        }),
+        PairOutcome::Declined => Err(Failure::PairingDeclined.into()),
+        PairOutcome::Full => Err(Failure::PairingFull.into()),
+        PairOutcome::Unavailable => Err(Failure::PromptUnavailable.into()),
+        PairOutcome::Cancelled => Err(Failure::PairingUnavailable.into()),
     }
 }
 
@@ -200,7 +218,7 @@ mod tests {
     use litz_core::session::Trust;
     use std::sync::RwLock;
 
-    async fn manual_attempt(expected: String, outcome: PairOutcome) -> Result<String> {
+    async fn manual_attempt(expected: String, outcome: PairOutcome) -> Result<PairingState> {
         let generated = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
         let desktop = generated.cert.der().to_vec();
         let server = transport::server_endpoint(
@@ -250,11 +268,11 @@ mod tests {
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             pair(
-                crate::fresh_identity()?,
+                crate::create_identity()?,
                 address,
                 expected,
                 "Test phone".into(),
-                Arc::new(Mutex::new(String::new())),
+                Arc::new(Mutex::new(PairingState::Connecting)),
                 Arc::new(Notify::new()),
             ),
         )
@@ -266,22 +284,27 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn approval_pins_the_discovered_computer_only() -> Result<()> {
         let accepted = manual_attempt(String::new(), PairOutcome::Accepted).await?;
-        let status: serde_json::Value = serde_json::from_str(&accepted)?;
-        assert_eq!(status["state"], "accepted");
-        assert_eq!(status["fingerprint"].as_str().map(str::len), Some(64));
-        assert!(
-            status["certificate"]
-                .as_array()
-                .is_some_and(|c| !c.is_empty())
-        );
+        let PairingState::Accepted {
+            certificate,
+            fingerprint,
+            ..
+        } = accepted
+        else {
+            panic!("pairing was not accepted: {accepted:?}");
+        };
+        assert_eq!(fingerprint.len(), 64);
+        assert!(!certificate.is_empty());
         let declined = manual_attempt(String::new(), PairOutcome::Declined)
             .await
             .unwrap_err();
-        assert!(declined.to_string().contains("declined"));
+        assert_eq!(Failure::of(declined.as_ref()), Failure::PairingDeclined);
         let unavailable = manual_attempt(String::new(), PairOutcome::Unavailable)
             .await
             .unwrap_err();
-        assert!(unavailable.to_string().contains("Turn on notifications"));
+        assert_eq!(
+            Failure::of(unavailable.as_ref()),
+            Failure::PromptUnavailable
+        );
         assert!(
             manual_attempt("0".repeat(64), PairOutcome::Accepted)
                 .await
@@ -301,8 +324,8 @@ mod tests {
             )?,
             "127.0.0.1:0".parse()?,
         )?;
-        let pairing = Pairing::start(
-            crate::fresh_identity()?,
+        let pairing = Pairing::new(
+            crate::create_identity()?,
             server.local_addr()?,
             String::new(),
             "Test phone".into(),

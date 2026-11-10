@@ -28,7 +28,7 @@ internal data class NearbyComputer(
  */
 internal class NearbyDiscovery(
     context: Context,
-    private val failed: (String) -> Unit = {},
+    private val failed: (UiText) -> Unit = {},
     private val changed: (List<NearbyComputer>) -> Unit,
 ) {
     private val nsd = context.getSystemService(NsdManager::class.java)
@@ -59,9 +59,7 @@ internal class NearbyDiscovery(
                     main.post {
                         if (listener === this) {
                             stop()
-                            failed(
-                                "Nearby discovery failed ($code). Check network permissions and tap Refresh."
-                            )
+                            failed(UiText(R.string.discovery_failed, listOf(code)))
                         }
                     }
                 }
@@ -122,7 +120,7 @@ internal class NearbyDiscovery(
             nsd.discoverServices("_litz._udp.", NsdManager.PROTOCOL_DNS_SD, next)
         } catch (error: Exception) {
             stop()
-            failed("Nearby discovery unavailable: ${error.message}. Tap Refresh to retry.")
+            failed(UiText(R.string.discovery_unavailable, listOf(error.reason())))
         }
     }
 
@@ -163,7 +161,7 @@ internal class NearbyDiscovery(
                 override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
                     if (updates[info.serviceName] !== this) return
                     updates.remove(info.serviceName)
-                    failed("Computer address unavailable ($errorCode). Tap Refresh to retry.")
+                    failed(UiText(R.string.address_unavailable_code, listOf(errorCode)))
                 }
 
                 override fun onServiceUpdated(updated: NsdServiceInfo) {
@@ -187,7 +185,7 @@ internal class NearbyDiscovery(
             nsd.registerServiceInfoCallback(info, Executor { main.post(it) }, callback)
         } catch (error: Exception) {
             updates.remove(info.serviceName)
-            failed("Computer address unavailable: ${error.message}. Tap Refresh to retry.")
+            failed(UiText(R.string.address_unavailable, listOf(error.reason())))
         }
     }
 
@@ -214,7 +212,7 @@ internal class NearbyDiscovery(
             Runnable {
                     if (generation == epoch && token == resolution) {
                         finish(null)
-                        failed("Computer address lookup timed out. Tap Refresh to retry.")
+                        failed(UiText(R.string.address_timed_out))
                     }
                 }
                 .also { main.postDelayed(it, 5000) }
@@ -224,9 +222,7 @@ internal class NearbyDiscovery(
                     main.post {
                         if (generation == epoch && token == resolution) {
                             finish(null)
-                            failed(
-                                "Computer address lookup failed ($errorCode). Tap Refresh to retry."
-                            )
+                            failed(UiText(R.string.address_failed, listOf(errorCode)))
                         }
                     }
                 }
@@ -239,7 +235,7 @@ internal class NearbyDiscovery(
             nsd.resolveService(info, callback)
         } catch (error: Exception) {
             finish(null)
-            failed("Address lookup unavailable: ${error.message}")
+            failed(UiText(R.string.address_unavailable, listOf(error.reason())))
         }
     }
 

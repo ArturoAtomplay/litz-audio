@@ -8,22 +8,28 @@ import android.content.pm.ServiceInfo
 import android.media.*
 import android.net.wifi.WifiManager
 import android.os.*
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
+import audio.litz.native.Engine
+import audio.litz.native.Route
+import audio.litz.native.SessionState
+import audio.litz.native.Settings
+import audio.litz.native.Status
+import audio.litz.native.VoiceSettings
 import java.util.concurrent.Executors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.json.JSONObject
 
 @Immutable
 internal data class SessionStatus(
     val settings: Settings = Settings(),
-    val json: String = "{}",
+    val status: Status? = null,
     val pending: Boolean = false,
-    val error: String? = null,
-    val directionErrors: List<String?> = listOf(null, null),
+    val error: UiText? = null,
+    val directionErrors: List<UiText?> = listOf(null, null),
     val audioPending: Boolean = false,
 )
 
@@ -32,8 +38,9 @@ class SessionService : Service() {
     private val executor = Executors.newSingleThreadExecutor { Thread(it, "litz-control") }
     private val nativeDispatcher = executor.asCoroutineDispatcher()
     private val mutex = Mutex()
-    private var handle =
-        0L // command access on nativeDispatcher; lifetime guarded for urgent cancel
+    // Commands run on nativeDispatcher; `lifetime` lets an urgent cancel reach
+    // the engine from another thread without racing its close.
+    private var engine: Engine? = null
     private val lifetime = Any()
     private var stopGeneration = 0
     private val mutable = MutableStateFlow(SessionStatus())
@@ -42,7 +49,7 @@ class SessionService : Service() {
     private lateinit var audio: AudioManager
     private var foreground = false
     private var foregroundTypes = 0
-    private var localError: String? = null
+    private var localError: UiText? = null
     private var active = false
     private var controlConnected = false
     private var usbEndpoint: String? = null
@@ -67,8 +74,7 @@ class SessionService : Service() {
                         mic = desired.mic && desired.input !in ids,
                         playback = desired.playback && desired.output !in ids,
                     )
-                if (next != desired)
-                    update(next, "Selected audio device disconnected; direction stopped")
+                if (next != desired) update(next, UiText(R.string.message_device_disconnected))
             }
         }
     private val noisy =
@@ -77,7 +83,7 @@ class SessionService : Service() {
                 if (desired.playback)
                     update(
                         desired.copy(playback = false),
-                        "Headphones disconnected — tap Listen to use your phone speaker",
+                        UiText(R.string.message_headphones_disconnected),
                     )
             }
         }
@@ -116,7 +122,7 @@ class SessionService : Service() {
                 .createNotificationChannel(
                     NotificationChannel(
                         CHANNEL,
-                        "Audio session",
+                        getString(R.string.notification_channel),
                         NotificationManager.IMPORTANCE_LOW,
                     )
                 )
@@ -141,12 +147,12 @@ class SessionService : Service() {
                                     PackageManager.PERMISSION_GRANTED
                         ) {
                             desired = desired.copy(mic = false)
-                            applyLocked("Microphone permission revoked")
+                            applyLocked(UiText(R.string.message_microphone_permission_revoked))
                         } else
                             try {
-                                publish(native("{\"op\":\"status\"}"))
+                                publish(native { it.status() })
                             } catch (e: Exception) {
-                                fail(e.message ?: "Native session unavailable")
+                                fail(e.text())
                             }
                     }
             }
@@ -189,7 +195,7 @@ class SessionService : Service() {
                         usbEndpoint = found
                         lastUsbAttempt = 0L
                     }
-                    if (JSONObject(mutable.value.json).optString("connected_endpoint") != found) {
+                    if (mutable.value.status?.connectedEndpoint != found) {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastUsbAttempt >= 5000L) {
                             lastUsbAttempt = now
@@ -221,11 +227,7 @@ class SessionService : Service() {
             START -> {
                 try {
                     val settings =
-                        Settings.from(
-                            JSONObject(
-                                intent.getStringExtra("settings") ?: error("Missing settings")
-                            )
-                        )
+                        settingsFrom(intent.getBundleExtra("settings") ?: error("Missing settings"))
                     // Only the visible Activity issues START. No boot receiver,
                     // sticky restart, remote command, or notification can enable mic.
                     require(settings.mic || settings.playback)
@@ -237,7 +239,7 @@ class SessionService : Service() {
                     promote(settings)
                     update(settings)
                 } catch (e: Exception) {
-                    fail(e.message ?: "Foreground start not allowed")
+                    fail(e.text())
                 }
             }
             STOP -> update(desired.copy(mic = false, playback = false))
@@ -254,13 +256,13 @@ class SessionService : Service() {
         require(s.mic || s.playback)
         // Android 14+ checks microphone while-in-use permissions here.
         if (Build.VERSION.SDK_INT >= 29 && types != 0)
-            startForeground(NOTIFICATION, notification("Connecting", s), types)
-        else startForeground(NOTIFICATION, notification("Connecting", s))
+            startForeground(NOTIFICATION, notification(R.string.notification_connecting, s), types)
+        else startForeground(NOTIFICATION, notification(R.string.notification_connecting, s))
         foreground = true
         foregroundTypes = if (Build.VERSION.SDK_INT >= 29) types else 0
     }
 
-    internal fun update(settings: Settings, reason: String? = null) {
+    internal fun update(settings: Settings, reason: UiText? = null) {
         scope.launch {
             mutex.withLock {
                 val changingAudioPath = desired.changesAudioPath(settings)
@@ -277,16 +279,16 @@ class SessionService : Service() {
                 try {
                     applyLocked(reason)
                 } catch (e: Exception) {
-                    fail(e.message ?: "Session failed")
+                    fail(e.text())
                 }
             }
         }
     }
 
-    private suspend fun applyLocked(reason: String?) {
+    private suspend fun applyLocked(reason: UiText?) {
         val generation = stopGeneration
         if (!desired.mic && !desired.playback) {
-            val result = native("{\"op\":\"stop\"}")
+            val result = native { it.stop() }
             active = controlConnected
             releaseLocks()
             if (foreground) {
@@ -308,15 +310,7 @@ class SessionService : Service() {
         // Listening deliberately mixes with other media, including YouTube.
         // Claiming AUDIOFOCUS_GAIN pauses the other app and invites Android to
         // mute us when it resumes. Hardware routing remains shared as well.
-        withContext(nativeDispatcher) {
-            if (handle == 0L) {
-                val identity =
-                    IdentityStore(this@SessionService).readSelected()
-                        ?: error("Pair a computer first")
-                synchronized(lifetime) { handle = Native.open(identity) }
-                check(handle != 0L) { "Native engine could not start" }
-            }
-        }
+        openEngine()
         if (generation != stopGeneration) {
             desired = desired.copy(mic = false, playback = false)
             applyLocked(reason)
@@ -342,52 +336,64 @@ class SessionService : Service() {
                         }
                         .map { it.id },
             )
-        val result =
-            native(JSONObject().put("op", "set").put("settings", desired.json()).toString())
-        publish(result, reason)
+        publish(native { it.set(desired) }, reason)
     }
 
-    private suspend fun native(command: String): String =
+    private suspend fun openEngine() =
         withContext(nativeDispatcher) {
-            if (handle == 0L) "{}" else Native.command(handle, command)
+            if (engine == null) {
+                val identity =
+                    IdentityStore(this@SessionService).readSelected()
+                        ?: throw UserFacingException(UiText(R.string.message_pair_first))
+                val opened = Engine(identity)
+                synchronized(lifetime) { engine = opened }
+            }
         }
 
-    private suspend fun publish(result: String, reason: String? = null) {
-        val j = JSONObject(result)
-        j.optJSONObject("desired")?.let { desired = Settings.from(it) }
-        val error =
-            reason ?: j.optString("error").takeUnless { it.isBlank() || it == "null" } ?: localError
-        val errors = j.optJSONArray("direction_errors")
+    private suspend fun native(call: (Engine) -> Status): Status? =
+        withContext(nativeDispatcher) { engine?.let(call) }
+
+    private suspend fun closeEngine() =
+        withContext(nativeDispatcher) {
+            synchronized(lifetime) {
+                engine?.close()
+                engine = null
+            }
+        }
+
+    private suspend fun publish(status: Status?, reason: UiText? = null) {
+        status?.let { desired = it.desired }
+        val error = reason ?: status?.error?.let { failureText(it) } ?: localError
+        val reachable =
+            status?.state in
+                listOf(
+                    SessionState.AUTHENTICATED,
+                    SessionState.STREAMING,
+                    SessionState.RECONNECTING,
+                )
         val perDirection =
-            (0..1).map { index ->
-                errors?.optString(index)?.takeUnless { it.isBlank() || it == "null" }
+            listOf(status?.microphone, status?.listening).mapIndexed { index, direction ->
+                direction?.error?.let { failureText(it, index) }
                     ?: error?.takeIf {
-                        !j.optString("state").let { state ->
-                            state == "Authenticated" ||
-                                state == "Streaming" ||
-                                state == "Reconnecting"
-                        } && if (index == 0) desired.mic else desired.playback
+                        !reachable && if (index == 0) desired.mic else desired.playback
                     }
-                    ?: mutable.value.directionErrors[index].takeIf {
-                        j.optJSONArray("running")?.optBoolean(index) != true
-                    }
+                    ?: mutable.value.directionErrors[index].takeIf { direction?.running != true }
             }
         mutable.value =
             SessionStatus(
                 desired,
-                result,
+                status,
                 pending = false,
                 error = error,
                 directionErrors = perDirection,
             )
-        val running = j.optJSONArray("running")
-        val hasAudio = running?.optBoolean(0) == true || running?.optBoolean(1) == true
-        val reconnecting = j.optString("state") == "Reconnecting"
+        val hasAudio = status?.microphone?.running == true || status?.listening?.running == true
+        val reconnecting = status?.state == SessionState.RECONNECTING
         if (!desired.mic && !desired.playback && foreground) {
-            val movedAway =
-                !j.optBoolean("owned") &&
-                    j.optString("owner").let { it.isNotBlank() && it != "null" }
-            applyLocked(error ?: if (movedAway) null else "Audio directions stopped")
+            val movedAway = status?.owned != true && !status?.owner.isNullOrBlank()
+            applyLocked(
+                error ?: if (movedAway) null else UiText(R.string.message_directions_stopped)
+            )
             return
         }
         if (!hasAudio && !reconnecting && error != null && foreground) {
@@ -412,60 +418,45 @@ class SessionService : Service() {
             promote(desired)
         if (foreground)
             getSystemService(NotificationManager::class.java)
-                .notify(NOTIFICATION, notification(j.optString("state", "Idle"), desired))
+                .notify(NOTIFICATION, notification(stateText(status?.state), desired))
     }
 
     internal fun address(endpoint: String) {
-        if (handle != 0L)
-            control(JSONObject().put("op", "address").put("endpoint", endpoint).toString())
+        if (engine != null) control { it.address(endpoint) }
     }
 
     internal fun rememberWifiAddress(endpoint: String) {
         wifiFallback = endpoint
     }
 
-    internal fun connect() = control("{\"op\":\"connect\"}")
+    internal fun connect() = control { it.connect() }
 
-    internal fun refreshRoutes() = control("{\"op\":\"refresh_routes\"}")
+    internal fun refreshRoutes() = control { it.refreshRoutes() }
 
     internal suspend fun forgetAndWait() {
-        mutex.withLock { if (handle != 0L) runCatching { native("{\"op\":\"forget\"}") } }
+        mutex.withLock { runCatching { native { it.forget() } } }
         disconnectAndWait()
     }
 
     internal suspend fun disconnectAndWait() {
         stopGeneration++
-        synchronized(lifetime) { if (handle != 0L) Native.cancel(handle) }
+        synchronized(lifetime) { engine?.cancel() }
         mutex.withLock {
             desired = desired.copy(mic = false, playback = false)
             controlConnected = false
             applyLocked(null)
-            withContext(nativeDispatcher) {
-                synchronized(lifetime) {
-                    if (handle != 0L) {
-                        Native.close(handle)
-                        handle = 0L
-                    }
-                }
-            }
+            closeEngine()
             active = false
             mutable.value = SessionStatus(desired)
         }
     }
 
-    internal fun route(revision: Long, route: Any) =
-        control(
-            JSONObject()
-                .put("op", "route")
-                .put("expected_revision", revision)
-                .put("route", route)
-                .toString()
-        )
+    internal fun route(revision: ULong, route: Route) = control { it.route(revision, route) }
 
-    private var pendingVoice: JSONObject? = null
+    private var pendingVoice: VoiceSettings? = null
     private var voiceJob: Job? = null
 
-    internal fun voice(revision: Long, voice: JSONObject) {
+    internal fun voice(revision: ULong, voice: VoiceSettings) {
         localError = null
         mutable.value = mutable.value.copy(error = null)
         pendingVoice = voice
@@ -477,63 +468,33 @@ class SessionService : Service() {
                     pendingVoice = null
                     mutex.withLock {
                         try {
-                            val current =
-                                Snapshot(mutable.value).routes?.optLong("revision") ?: revision
-                            publish(
-                                native(
-                                    JSONObject()
-                                        .put("op", "voice")
-                                        .put("expected_revision", current)
-                                        .put("voice", next)
-                                        .toString()
-                                )
-                            )
+                            val current = mutable.value.status?.desktopRoutes?.revision ?: revision
+                            publish(native { it.voice(current, next) })
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            mutable.value =
-                                mutable.value.copy(
-                                    error = e.message ?: "Settings could not be saved"
-                                )
+                            mutable.value = mutable.value.copy(error = e.text())
                         }
                     }
                 }
             }
     }
 
-    private fun control(command: String) {
+    private fun control(call: (Engine) -> Status) {
         mutable.value = mutable.value.copy(pending = true, audioPending = false, error = null)
         scope.launch {
             mutex.withLock {
                 try {
-                    val opening = handle == 0L
-                    withContext(nativeDispatcher) {
-                        if (handle == 0L) {
-                            val identity =
-                                IdentityStore(this@SessionService).readSelected()
-                                    ?: error("Pair a computer first")
-                            synchronized(lifetime) { handle = Native.open(identity) }
-                            check(handle != 0L) { "Could not open the native engine" }
-                        }
-                    }
-                    if (opening) {
+                    if (engine == null) {
+                        openEngine()
                         val preferences = Preferences(this@SessionService).read()
-                        native(
-                            JSONObject()
-                                .put("op", "set")
-                                .put("settings", preferences.json())
-                                .toString()
-                        )
+                        native { it.set(preferences) }
                     }
                     controlConnected = true
                     active = true
-                    publish(native(command))
+                    publish(native(call))
                 } catch (e: Exception) {
-                    mutable.value =
-                        mutable.value.copy(
-                            pending = false,
-                            error = e.message ?: "Could not connect",
-                        )
+                    mutable.value = mutable.value.copy(pending = false, error = e.text())
                 }
             }
         }
@@ -549,34 +510,33 @@ class SessionService : Service() {
         wifiLocks.forEach { if (it.isHeld) it.release() }
     }
 
-    private fun fail(message: String) {
+    private fun fail(message: UiText) {
         stopGeneration++
         desired = desired.copy(mic = false, playback = false, muted = false)
         active = false
         controlConnected = false
-        synchronized(lifetime) { if (handle != 0L) Native.cancel(handle) }
+        synchronized(lifetime) { engine?.cancel() }
         releaseLocks()
         if (foreground) {
             removeForeground()
             foreground = false
         }
         mutable.value = SessionStatus(settings = desired, error = message)
-        scope.launch {
-            mutex.withLock {
-                withContext(nativeDispatcher) {
-                    synchronized(lifetime) {
-                        if (handle != 0L) {
-                            Native.close(handle)
-                            handle = 0L
-                        }
-                    }
-                }
-            }
-        }
+        scope.launch { mutex.withLock { closeEngine() } }
         stopSelf()
     }
 
-    private fun notification(state: String, s: Settings): Notification {
+    @StringRes
+    private fun stateText(state: SessionState?): Int =
+        when (state) {
+            SessionState.RECONNECTING -> R.string.notification_reconnecting
+            SessionState.STREAMING -> R.string.notification_streaming
+            SessionState.AUTHENTICATED -> R.string.notification_connected
+            SessionState.IDLE,
+            null -> R.string.notification_idle
+        }
+
+    private fun notification(@StringRes state: Int, s: Settings): Notification {
         fun action(name: String, code: Int) =
             PendingIntent.getService(
                 this,
@@ -591,25 +551,49 @@ class SessionService : Service() {
                 Intent(this, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE,
             )
-        val desktop =
-            runCatching { JSONObject(mutable.value.json).optString("desktop") }.getOrDefault("")
+        val desktop = mutable.value.status?.desktop.orEmpty()
+        val snapshot = Snapshot(mutable.value)
+        val microphone =
+            when {
+                snapshot.running(0) -> R.string.diagnostics_on
+                s.muted && snapshot.connected -> R.string.diagnostics_muted
+                else -> R.string.diagnostics_off
+            }
+        val listen = if (snapshot.running(1)) R.string.diagnostics_on else R.string.diagnostics_off
         val builder =
             if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL)
             else @Suppress("DEPRECATION") Notification.Builder(this)
         return builder
             .setSmallIcon(R.drawable.ic_stat_litz)
-            .setContentTitle("Litz Audio · $desktop")
+            .setContentTitle(getString(R.string.notification_title, desktop))
             .setContentText(
-                "$state · mic ${if (Snapshot(mutable.value).running(0)) "running" else if (s.muted && Snapshot(mutable.value).connected) "muted" else "off"} · listen ${if (Snapshot(mutable.value).running(1)) "running" else "off"}"
+                getString(
+                    R.string.notification_text,
+                    getString(state),
+                    getString(microphone),
+                    getString(listen),
+                )
             )
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .addAction(Notification.Action.Builder(null, "Stop", action(STOP, 1)).build())
+            .addAction(
+                Notification.Action.Builder(
+                        null,
+                        getString(R.string.notification_stop),
+                        action(STOP, 1),
+                    )
+                    .build()
+            )
             .apply {
                 if (s.mic && !s.muted)
                     addAction(
-                        Notification.Action.Builder(null, "Mute mic", action(MUTE, 2)).build()
+                        Notification.Action.Builder(
+                                null,
+                                getString(R.string.notification_mute),
+                                action(MUTE, 2),
+                            )
+                            .build()
                     )
             }
             .build()
@@ -626,13 +610,11 @@ class SessionService : Service() {
         audio.unregisterAudioDeviceCallback(devices)
         unregisterReceiver(noisy)
         releaseLocks()
-        synchronized(lifetime) { if (handle != 0L) Native.cancel(handle) }
+        synchronized(lifetime) { engine?.cancel() }
         executor.execute {
             synchronized(lifetime) {
-                if (handle != 0L) {
-                    Native.close(handle)
-                    handle = 0L
-                }
+                engine?.close()
+                engine = null
             }
         }
         executor.shutdown()
