@@ -14,6 +14,7 @@ use std::{
 struct Fixture {
     children: Vec<Child>,
     daemon_input: Option<std::process::ChildStdin>,
+    prompts: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
     directory: std::path::PathBuf,
 }
 impl Drop for Fixture {
@@ -78,8 +79,13 @@ async fn enroll(connection: &quinn::Connection, fixture: &mut Fixture) {
         .write(&Record::new(1, Message::PairReveal { nonce }))
         .await
         .unwrap();
-    // Without a session bus the daemon asks on stdin; allow it. The result
-    // arrives only after the person approves, mirroring a phone.
+    // Without a session bus the daemon asks on stdin; answer once it asks.
+    // The result arrives only after the person approves, mirroring a phone.
+    let prompts = fixture.prompts.as_mut().expect("daemon stderr");
+    tokio::time::timeout(Duration::from_secs(10), prompts.recv())
+        .await
+        .expect("pairing prompt")
+        .expect("daemon stderr open");
     fixture
         .daemon_input
         .as_mut()
@@ -100,6 +106,27 @@ async fn enroll(connection: &quinn::Connection, fixture: &mut Fixture) {
     ));
 }
 
+/// Echoes the daemon's stderr and reports each approval question it asks.
+fn watch_prompts(
+    mut stderr: std::process::ChildStderr,
+) -> tokio::sync::mpsc::UnboundedReceiver<()> {
+    use std::io::Read;
+    let (prompted, prompts) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let mut seen = String::new();
+        let mut chunk = [0; 4096];
+        while let Ok(read @ 1..) = stderr.read(&mut chunk) {
+            let _ = std::io::stderr().write_all(&chunk[..read]);
+            seen.push_str(&String::from_utf8_lossy(&chunk[..read]));
+            while let Some(end) = seen.find("[y/N]") {
+                seen.drain(..end + 5);
+                let _ = prompted.send(());
+            }
+        }
+    });
+    prompts
+}
+
 fn capabilities() -> Message {
     Message::Capabilities { desktop: None }
 }
@@ -115,6 +142,7 @@ async fn live_routes_are_revision_checked_and_do_not_restart_the_agent() {
     let mut fixture = Fixture {
         children: vec![],
         daemon_input: None,
+        prompts: None,
         directory: directory.clone(),
     };
     let config = directory.join("pipewire.conf");
@@ -182,11 +210,12 @@ context.objects = [
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
     );
     fixture.daemon_input = fixture.children[1].stdin.take();
+    fixture.prompts = Some(watch_prompts(fixture.children[1].stderr.take().unwrap()));
     let mut endpoint = transport::client_endpoint("127.0.0.1:0".parse().unwrap()).unwrap();
     endpoint.set_default_client_config(
         transport::client(

@@ -1,4 +1,5 @@
 use litz_core::protocol::APPROVAL_WINDOW;
+use std::future::Future;
 use std::net::IpAddr;
 
 pub struct Request<'a> {
@@ -33,46 +34,71 @@ fn now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// `None` when no prompt can be shown. The prompt is withdrawn, and counts as
+/// a refusal, once `abandoned` completes or the approval window ends.
 #[cfg(target_os = "linux")]
-pub async fn approve(request: &Request<'_>) -> Option<bool> {
-    match notification::ask(request).await {
+pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>) -> Option<bool> {
+    let mut abandoned = std::pin::pin!(abandoned);
+    match notification::ask(request, abandoned.as_mut()).await {
         Ok(answer) => Some(answer),
         Err(error) => {
             eprintln!("litzd: no desktop notification ({error}); asking on the terminal");
-            terminal(request).await
+            terminal::ask(request, abandoned).await
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-async fn terminal(request: &Request<'_>) -> Option<bool> {
-    use std::io::{BufRead, IsTerminal, Write};
-    let prompt = format!("{}\n{}\n[y/N] ", request.question(), request.details());
-    let answer = tokio::task::spawn_blocking(move || {
-        if std::io::stdin().is_terminal() {
-            let _ = write!(std::io::stderr(), "{prompt}");
+mod terminal {
+    use super::{APPROVAL_WINDOW, Future, Request};
+    use std::io::BufRead;
+    use std::pin::Pin;
+    use std::sync::OnceLock;
+    use tokio::sync::{Mutex, mpsc};
+
+    /// One thread owns stdin for the life of the process: a reader per prompt
+    /// would outlive an expired prompt and swallow the next answer.
+    fn lines() -> &'static Mutex<mpsc::Receiver<String>> {
+        static LINES: OnceLock<Mutex<mpsc::Receiver<String>>> = OnceLock::new();
+        LINES.get_or_init(|| {
+            let (sender, receiver) = mpsc::channel(1);
+            let _ = std::thread::Builder::new()
+                .name("litz-stdin".into())
+                .spawn(move || {
+                    for line in std::io::stdin().lock().lines() {
+                        let Ok(line) = line else { break };
+                        if sender.blocking_send(line).is_err() {
+                            break;
+                        }
+                    }
+                });
+            Mutex::new(receiver)
+        })
+    }
+
+    pub async fn ask(
+        request: &Request<'_>,
+        abandoned: Pin<&mut impl Future<Output = ()>>,
+    ) -> Option<bool> {
+        let mut lines = lines().lock().await;
+        while lines.try_recv().is_ok() {}
+        eprint!("{}\n{}\n[y/N] ", request.question(), request.details());
+        tokio::select! {
+            line = lines.recv() => {
+                line.map(|line| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+            }
+            _ = tokio::time::sleep(APPROVAL_WINDOW) => Some(false),
+            _ = abandoned => Some(false),
         }
-        let mut line = String::new();
-        match std::io::stdin().lock().read_line(&mut line) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(matches!(
-                line.trim().to_ascii_lowercase().as_str(),
-                "y" | "yes"
-            )),
-        }
-    });
-    match tokio::time::timeout(APPROVAL_WINDOW, answer).await {
-        Ok(Ok(answer)) => answer,
-        Ok(Err(_)) => None,
-        Err(_) => Some(false),
     }
 }
 
 #[cfg(target_os = "linux")]
 mod notification {
-    use super::{APPROVAL_WINDOW, Request};
+    use super::{APPROVAL_WINDOW, Future, Request};
     use futures_lite::StreamExt;
     use std::collections::HashMap;
+    use std::pin::Pin;
     use zbus::Variant;
 
     /// Notification servers may render markup in the body.
@@ -84,7 +110,10 @@ mod notification {
 
     /// `Err` only when no server can show buttons; dismissing the
     /// notification or letting it expire is a refusal.
-    pub async fn ask(request: &Request<'_>) -> zbus::Result<bool> {
+    pub async fn ask(
+        request: &Request<'_>,
+        abandoned: Pin<&mut impl Future<Output = ()>>,
+    ) -> zbus::Result<bool> {
         let connection = zbus::Connection::session().await?;
         let proxy = zbus::Proxy::new(
             &connection,
@@ -138,37 +167,36 @@ mod notification {
             }
             Ok(false)
         };
-        match tokio::time::timeout(APPROVAL_WINDOW, answer).await {
-            Ok(result) => result,
-            Err(_) => {
-                let _: zbus::Result<()> = proxy.call("CloseNotification", &(id,)).await;
-                Ok(false)
-            }
+        tokio::select! {
+            answer = answer => return answer,
+            _ = tokio::time::sleep(APPROVAL_WINDOW) => {}
+            _ = abandoned => {}
         }
+        let _: zbus::Result<()> = proxy.call("CloseNotification", &(id,)).await;
+        Ok(false)
     }
 }
 
 #[cfg(windows)]
-pub async fn approve(request: &Request<'_>) -> Option<bool> {
-    let (question, details) = (request.question(), request.details());
-    match tokio::task::spawn_blocking(move || toast::ask(&question, &details)).await {
-        Ok(Ok(answer)) => Some(answer),
-        Ok(Err(error)) => {
+pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>) -> Option<bool> {
+    match toast::ask(&request.question(), &request.details(), abandoned).await {
+        Ok(answer) => Some(answer),
+        Err(error) => {
             eprintln!("litzd: approval notification failed: {error}");
             None
         }
-        Err(_) => None,
     }
 }
 
 #[cfg(windows)]
 mod toast {
-    use super::APPROVAL_WINDOW;
+    use super::{APPROVAL_WINDOW, Future};
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Mutex, OnceLock, mpsc};
+    use std::sync::{Mutex, OnceLock};
+    use tokio::sync::oneshot;
     use windows::Data::Xml::Dom::XmlDocument;
-    use windows::Foundation::TypedEventHandler;
+    use windows::Foundation::{DateTime, IReference, PropertyValue, TypedEventHandler};
     use windows::UI::Notifications::{
         NotificationSetting, ToastActivatedEventArgs, ToastDismissalReason,
         ToastDismissedEventArgs, ToastNotification, ToastNotificationManager,
@@ -192,20 +220,38 @@ mod toast {
     const APP_ID: PCWSTR = w!("LitzAudio");
     const ACTIVATOR: GUID = GUID::from_u128(0xBFD99F34_90AE_4D6D_A33A_6EB4D6FCC2A4);
 
-    static PENDING: Mutex<Option<(u64, mpsc::Sender<Result<bool>>)>> = Mutex::new(None);
+    static PENDING: Mutex<Option<(u64, oneshot::Sender<Result<bool>>)>> = Mutex::new(None);
 
-    fn reply(arguments: &str) {
-        let Some((choice, id)) = arguments.split_once(' ') else {
-            return;
-        };
+    fn settle(id: u64, answer: Result<bool>) {
         let mut pending = PENDING.lock().unwrap();
-        if pending
-            .as_ref()
-            .is_some_and(|(current, _)| id == current.to_string())
+        if pending.as_ref().is_some_and(|(current, _)| *current == id)
             && let Some((_, sender)) = pending.take()
         {
-            let _ = sender.send(Ok(choice == "allow"));
+            let _ = sender.send(answer);
         }
+    }
+
+    fn reply(arguments: &str) {
+        if let Some((choice, id)) = arguments.split_once(' ')
+            && let Ok(id) = id.parse()
+        {
+            settle(id, Ok(choice == "allow"));
+        }
+    }
+
+    /// The notification center drops the toast by itself once the request
+    /// expires, even if litzd is gone by then.
+    fn expiry() -> Result<IReference<DateTime>> {
+        const UNIX_EPOCH_SINCE_1601: i64 = 116_444_736_000_000_000;
+        let deadline = std::time::SystemTime::now() + APPROVAL_WINDOW;
+        let since_unix = deadline
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| Error::new(E_FAIL, error.to_string()))?;
+        let ticks = UNIX_EPOCH_SINCE_1601 + (since_unix.as_nanos() / 100) as i64;
+        PropertyValue::CreateDateTime(DateTime {
+            UniversalTime: ticks,
+        })?
+        .cast()
     }
 
     #[implement(INotificationActivationCallback)]
@@ -315,7 +361,11 @@ mod toast {
             .replace('"', "&quot;")
     }
 
-    pub fn ask(question: &str, details: &str) -> Result<bool> {
+    pub async fn ask(
+        question: &str,
+        details: &str,
+        abandoned: impl Future<Output = ()>,
+    ) -> Result<bool> {
         static REGISTERED: OnceLock<()> = OnceLock::new();
         static NEXT: AtomicU64 = AtomicU64::new(1);
         if REGISTERED.get().is_none() {
@@ -331,8 +381,6 @@ mod toast {
             return Err(Error::new(E_FAIL, "notifications are turned off"));
         }
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        let (sender, receiver) = mpsc::channel();
-        *PENDING.lock().unwrap() = Some((id, sender.clone()));
         let xml = XmlDocument::new()?;
         xml.LoadXml(&HSTRING::from(format!(
             r#"<toast scenario="reminder" launch="deny {id}"><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual><actions><action content="Allow" arguments="allow {id}" activationType="foreground"/><action content="Deny" arguments="deny {id}" activationType="foreground"/></actions></toast>"#,
@@ -340,6 +388,7 @@ mod toast {
             escape(details)
         )))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
+        toast.SetExpirationTime(&expiry()?)?;
         toast.Activated(&TypedEventHandler::new(|_, args: Ref<IInspectable>| {
             reply(
                 &args
@@ -353,19 +402,25 @@ mod toast {
         toast.Dismissed(&TypedEventHandler::new(
             move |_, args: Ref<ToastDismissedEventArgs>| {
                 if args.ok()?.Reason()? == ToastDismissalReason::UserCanceled {
-                    reply(&format!("deny {id}"));
+                    settle(id, Ok(false));
                 }
                 Ok(())
             },
         ))?;
         toast.Failed(&TypedEventHandler::new(move |_, _| {
-            let _ = sender.send(Err(E_FAIL.into()));
+            settle(id, Err(E_FAIL.into()));
             Ok(())
         }))?;
+        let (sender, answer) = oneshot::channel();
+        *PENDING.lock().unwrap() = Some((id, sender));
         notifier.Show(&toast)?;
-        let answer = receiver.recv_timeout(APPROVAL_WINDOW);
+        let answer = tokio::select! {
+            answer = answer => answer.unwrap_or(Ok(false)),
+            _ = tokio::time::sleep(APPROVAL_WINDOW) => Ok(false),
+            _ = abandoned => Ok(false),
+        };
         PENDING.lock().unwrap().take();
         let _ = notifier.Hide(&toast);
-        answer.unwrap_or(Ok(false))
+        answer
     }
 }

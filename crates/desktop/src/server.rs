@@ -346,13 +346,16 @@ async fn pair(
     } else {
         hub.replacement()
     };
-    let allowed = crate::approval::approve(&crate::approval::Request {
+    let prompt = crate::approval::Request {
         name: &name,
         address: c.remote_address().ip(),
         code: &code,
         replaces: replaces
             .as_ref()
             .map(|(_, name, seen)| (name.as_str(), *seen)),
+    };
+    let allowed = crate::approval::approve(&prompt, async {
+        c.closed().await;
     })
     .await;
     if c.close_reason().is_some() {

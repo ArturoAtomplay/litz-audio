@@ -27,6 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|_| "Arguments must be valid Unicode")
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // COM starts litzd this way when a pairing notification outlives the
+    // daemon; that request is already gone.
     #[cfg(windows)]
     if args.first().is_some_and(|arg| arg == "-ToastActivated") {
         return Ok(());
