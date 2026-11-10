@@ -216,42 +216,230 @@ pub async fn serve(hub: Arc<Hub>) -> Result<()> {
     }
 }
 
+/// The account running this process. Its SID names the pipe, and a pipe it
+/// does not own belongs to someone squatting on that name.
 #[cfg(windows)]
-fn pipe_name() -> String {
-    let user = std::env::var("USERNAME").unwrap_or_default();
-    let user: String = user.chars().filter(char::is_ascii_alphanumeric).collect();
-    format!(r"\\.\pipe\litz-audio-{user}")
+struct User {
+    token: Vec<usize>,
+    sid: String,
+}
+
+#[cfg(windows)]
+impl User {
+    fn current() -> io::Result<Self> {
+        use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+        use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+        use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TokenUser};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let mut handle = std::ptr::null_mut();
+        // SAFETY: the pseudo handle needs no closing; `handle` is a valid out pointer.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut length = 0;
+        // SAFETY: a null buffer of length 0 only queries the required length.
+        unsafe { GetTokenInformation(handle, TokenUser, std::ptr::null_mut(), 0, &mut length) };
+        // usize elements keep the TOKEN_USER pointer field aligned.
+        let mut token = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+        // SAFETY: `token` holds at least `length` writable bytes.
+        let filled = unsafe {
+            GetTokenInformation(
+                handle,
+                TokenUser,
+                token.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        };
+        let error = io::Error::last_os_error();
+        // SAFETY: `handle` came from OpenProcessToken and is closed once.
+        unsafe { CloseHandle(handle) };
+        if filled == 0 {
+            return Err(error);
+        }
+        let mut user = Self {
+            token,
+            sid: String::new(),
+        };
+        let mut text = std::ptr::null_mut();
+        // SAFETY: `psid` points into `user.token`; the string is freed below.
+        if unsafe { ConvertSidToStringSidW(user.psid(), &mut text) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: ConvertSidToStringSidW returned a NUL-terminated string,
+        // allocated with LocalAlloc and freed once here.
+        unsafe {
+            user.sid = String::from_utf16_lossy(windows::core::PCWSTR(text).as_wide());
+            LocalFree(text.cast());
+        }
+        Ok(user)
+    }
+
+    fn psid(&self) -> windows_sys::Win32::Security::PSID {
+        // SAFETY: `token` holds the TOKEN_USER that GetTokenInformation wrote.
+        unsafe {
+            (*self
+                .token
+                .as_ptr()
+                .cast::<windows_sys::Win32::Security::TOKEN_USER>())
+            .User
+            .Sid
+        }
+    }
+
+    fn pipe(&self) -> String {
+        format!(r"\\.\pipe\litz-audio-{}", self.sid)
+    }
+
+    fn owns(&self, handle: std::os::windows::io::RawHandle) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
+        use windows_sys::Win32::Security::{EqualSid, OWNER_SECURITY_INFORMATION};
+        let (mut owner, mut descriptor) = (std::ptr::null_mut(), std::ptr::null_mut());
+        // SAFETY: `handle` is open; the out pointers are valid and `descriptor`
+        // owns `owner`, so it is freed after the comparison.
+        unsafe {
+            let status = GetSecurityInfo(
+                handle,
+                SE_KERNEL_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                &mut owner,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            );
+            if status != 0 {
+                return Err(io::Error::from_raw_os_error(status as i32));
+            }
+            let equal = EqualSid(owner, self.psid()) != 0;
+            LocalFree(descriptor);
+            Ok(equal)
+        }
+    }
 }
 
 #[cfg(windows)]
 fn connect() -> Result<Option<std::fs::File>> {
-    match std::fs::OpenOptions::new()
+    use std::os::windows::io::AsRawHandle;
+    let user = User::current()?;
+    let pipe = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(pipe_name())
+        .open(user.pipe())
     {
-        Ok(pipe) => Ok(Some(pipe)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+        Ok(pipe) => pipe,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    if !user.owns(pipe.as_raw_handle())? {
+        return Err("the litzd pipe belongs to another account".into());
+    }
+    Ok(Some(pipe))
+}
+
+/// Owned by the user, who alone may open it. Without an explicit owner the
+/// pipe takes the token's default owner, which for an elevated administrator
+/// is the Administrators group that every admin account shares.
+#[cfg(windows)]
+struct Descriptor(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
+
+// SAFETY: the descriptor is LocalAlloc'd memory that is only read after creation.
+#[cfg(windows)]
+unsafe impl Send for Descriptor {}
+// SAFETY: as above; nothing mutates the descriptor once built.
+#[cfg(windows)]
+unsafe impl Sync for Descriptor {}
+
+#[cfg(windows)]
+impl Descriptor {
+    fn private_to(user: &User) -> io::Result<Self> {
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        let sddl: Vec<u16> = format!("O:{0}D:P(A;;GA;;;{0})", user.sid)
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        let mut descriptor = std::ptr::null_mut();
+        // SAFETY: `sddl` is NUL-terminated and `descriptor` is a valid out pointer.
+        let converted = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        };
+        if converted == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(descriptor))
+    }
+
+    fn create(
+        &self,
+        name: &str,
+        first: bool,
+    ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        let mut attributes = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        };
+        // SAFETY: `attributes` and the descriptor it points to outlive the call.
+        unsafe {
+            tokio::net::windows::named_pipe::ServerOptions::new()
+                .first_pipe_instance(first)
+                .reject_remote_clients(true)
+                .create_with_security_attributes_raw(name, (&raw mut attributes).cast())
+        }
     }
 }
 
-/// Creating the first pipe instance stops another process from
-/// impersonating the daemon.
+#[cfg(windows)]
+impl Drop for Descriptor {
+    fn drop(&mut self) {
+        // SAFETY: allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
+        unsafe { windows_sys::Win32::Foundation::LocalFree(self.0) };
+    }
+}
+
+/// Creating the first instance fails if another process already holds the
+/// name, so nobody can stand in for the daemon.
 #[cfg(windows)]
 pub async fn serve(hub: Arc<Hub>) -> Result<()> {
-    use tokio::net::windows::named_pipe::ServerOptions;
-    let name = pipe_name();
-    let mut server = ServerOptions::new()
-        .first_pipe_instance(true)
-        .reject_remote_clients(true)
-        .create(&name)?;
+    let user = User::current()?;
+    let descriptor = Descriptor::private_to(&user)?;
+    let name = user.pipe();
+    let mut server = descriptor.create(&name, true)?;
     loop {
         server.connect().await?;
-        let connected = server;
-        server = ServerOptions::new()
-            .reject_remote_clients(true)
-            .create(&name)?;
-        spawn_handler(connected, &hub);
+        let next = descriptor.create(&name, false)?;
+        spawn_handler(std::mem::replace(&mut server, next), &hub);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::os::windows::io::AsRawHandle;
+
+    #[tokio::test]
+    async fn pipe_belongs_to_the_user_who_created_it() {
+        let user = User::current().unwrap();
+        assert!(user.sid.starts_with("S-1-"));
+        let name = format!(r"\\.\pipe\litz-audio-test-{}", std::process::id());
+        let _server = Descriptor::private_to(&user)
+            .unwrap()
+            .create(&name, true)
+            .unwrap();
+        let client = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+            .unwrap();
+        assert!(user.owns(client.as_raw_handle()).unwrap());
     }
 }
