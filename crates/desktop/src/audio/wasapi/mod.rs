@@ -34,17 +34,14 @@ struct Render {
 impl Render {
     fn open() -> Result<Self> {
         let devices = DeviceEnumerator::new()?.get_device_collection(&Direction::Render)?;
-        let mut selected = None;
-        for i in 0..devices.get_nbr_devices()?.min(32) {
-            let device = devices.get_device_at_index(i)?;
-            if capture::is_cable(&device) {
-                if selected.is_some() {
-                    return Err("Multiple VB-CABLE microphone endpoints".into());
-                }
-                selected = Some(device);
-            }
-        }
-        let device = selected
+        let device = (0..devices.get_nbr_devices()?.min(32))
+            .filter_map(|i| devices.get_device_at_index(i).ok())
+            .filter(capture::is_cable)
+            .min_by_key(|device| {
+                !device
+                    .get_description()
+                    .is_ok_and(|pin| pin == "CABLE Input")
+            })
             .ok_or("Install VB-CABLE to use the phone microphone; listening remains available")?;
         let mut client = device.get_iaudioclient()?;
         client.initialize_client(

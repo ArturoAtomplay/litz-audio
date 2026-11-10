@@ -21,12 +21,13 @@ pub struct Captured {
     pub at: Instant,
 }
 
+/// Matches the adapter VB-CABLE's driver installs, not an endpoint name people
+/// can rename in Sound settings. Its "CABLE Input" and "CABLE In 16 Ch" pins
+/// both feed CABLE Output, so neither is a listening source.
 pub fn is_cable(device: &Device) -> bool {
-    // Deliberately fail closed: never inject the microphone into the default
-    // speakers. An installed VB-CABLE endpoint is the supported initial bridge.
     device
-        .get_friendlyname()
-        .is_ok_and(|n| n == "CABLE Input (VB-Audio Virtual Cable)")
+        .get_interface_friendlyname()
+        .is_ok_and(|name| name == "VB-Audio Virtual Cable")
 }
 pub fn outputs() -> Result<Vec<Endpoint>> {
     let devices = DeviceEnumerator::new()?.get_device_collection(&Direction::Render)?;
