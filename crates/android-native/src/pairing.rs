@@ -105,15 +105,34 @@ async fn pair(
         "[::]:0"
     };
     let mut endpoint = transport::client_endpoint(bind.parse()?)?;
-    let phone = identity.certificate.clone();
     endpoint.set_default_client_config(transport::provisional_client(
-        identity.certificate,
+        identity.certificate.clone(),
         identity.private_key,
     )?);
-    let connection = tokio::select! {
-        _ = cancel.notified() => return Ok(serde_json::json!({"state":"cancelled"}).to_string()),
-        result = tokio::time::timeout(Duration::from_secs(5), endpoint.connect(address, "litz.local")?) => result??,
+    let result = tokio::select! {
+        _ = cancel.notified() => Ok(serde_json::json!({"state": "cancelled"}).to_string()),
+        result = exchange(&endpoint, &identity.certificate, address, &expected, name, &status) => result,
     };
+    // The runtime ends with this call; without waiting, CLOSE is never sent and
+    // the computer keeps prompting for a phone that already gave up.
+    endpoint.close(0u8.into(), b"pairing ended");
+    let _ = tokio::time::timeout(Duration::from_secs(1), endpoint.wait_idle()).await;
+    result
+}
+
+async fn exchange(
+    endpoint: &quinn::Endpoint,
+    phone: &[u8],
+    address: SocketAddr,
+    expected: &str,
+    name: String,
+    status: &Mutex<String>,
+) -> Result<String> {
+    let connection = tokio::time::timeout(
+        Duration::from_secs(5),
+        endpoint.connect(address, "litz.local")?,
+    )
+    .await??;
     let desktop = transport::peer_certificate(&connection)?;
     let actual = fingerprint(&desktop).to_string();
     if !expected.is_empty() && actual != expected.to_ascii_lowercase() {
@@ -123,21 +142,15 @@ async fn pair(
     let mut nonce = [0u8; 32];
     getrandom::fill(&mut id).map_err(|e| e.to_string())?;
     getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
+    let id = DeviceId(id);
     let mut control = Control::new(connection.open_bi().await?);
-    control
-        .write(&Record::new(
-            1,
-            Message::PairRequest {
-                id: DeviceId(id),
-                name,
-                commitment: commitment(&nonce),
-            },
-        ))
-        .await?;
-    let reply = tokio::select! {
-        _ = cancel.notified() => return Ok(serde_json::json!({"state":"cancelled"}).to_string()),
-        reply = tokio::time::timeout(Duration::from_secs(10), control.read()) => reply??,
+    let request = Message::PairRequest {
+        id,
+        name,
+        commitment: commitment(&nonce),
     };
+    control.write(&Record::new(1, request)).await?;
+    let reply = tokio::time::timeout(Duration::from_secs(10), control.read()).await??;
     let Message::PairNonce {
         nonce: desktop_nonce,
     } = reply.message
@@ -147,35 +160,38 @@ async fn pair(
     control
         .write(&Record::new(1, Message::PairReveal { nonce }))
         .await?;
-    let code = verification_code(&phone, &desktop, &nonce, &desktop_nonce);
-    let approval_wait = litz_core::protocol::APPROVAL_WINDOW + Duration::from_secs(10);
-    let outcome = tokio::select! {
-        _ = cancel.notified() => PairOutcome::Cancelled,
-        result = tokio::time::timeout(approval_wait, async {
-            if let Ok(mut state) = status.lock() { *state = serde_json::json!({"state":"reviewing","code":code}).to_string(); }
-            let reply = control.read().await?;
-            match reply {
-                Record { request_id: 1, message: Message::PairResult { id: received, outcome }, .. } if received == DeviceId(id) => {
-                    match outcome {
-                        PairOutcome::Declined => return Err("The computer declined the pairing request".into()),
-                        PairOutcome::Full => return Err("The computer declined: all its pairing slots are in use".into()),
-                        PairOutcome::Unavailable => return Err("The computer could not show the pairing prompt. Turn on notifications for Litz Audio on the computer, then try again.".into()),
-                        _ => {}
-                    }
-                    Ok::<PairOutcome, transport::Error>(outcome)
-                }
-                _ => Err("Pairing unavailable; try again shortly".into()),
-            }
-        }) => result??,
+    let code = verification_code(phone, &desktop, &nonce, &desktop_nonce);
+    if let Ok(mut status) = status.lock() {
+        *status = serde_json::json!({"state": "reviewing", "code": code}).to_string();
+    }
+    let approval = litz_core::protocol::APPROVAL_WINDOW + Duration::from_secs(10);
+    let reply = tokio::time::timeout(approval, control.read()).await??;
+    let outcome = match reply {
+        Record {
+            request_id: 1,
+            message:
+                Message::PairResult {
+                    id: received,
+                    outcome,
+                },
+            ..
+        } if received == id => outcome,
+        _ => return Err("Pairing unavailable; try again shortly".into()),
     };
-    connection.close(0u8.into(), b"pairing complete");
-    Ok(match outcome {
-        PairOutcome::Accepted => serde_json::json!({"state":"accepted","certificate":desktop,"endpoint":address.to_string(),"fingerprint":actual}).to_string(),
-        PairOutcome::Cancelled => serde_json::json!({"state":"cancelled"}).to_string(),
-        PairOutcome::Declined | PairOutcome::Full | PairOutcome::Unavailable => {
-            serde_json::json!({"state":"error","message":"The computer declined the pairing request"}).to_string()
+    match outcome {
+        PairOutcome::Accepted => Ok(serde_json::json!({
+            "state": "accepted",
+            "certificate": desktop,
+            "endpoint": address.to_string(),
+            "fingerprint": actual,
+        }).to_string()),
+        PairOutcome::Declined => Err("The computer declined the pairing request".into()),
+        PairOutcome::Full => {
+            Err("The computer declined: all its pairing slots are in use".into())
         }
-    })
+        PairOutcome::Unavailable => Err("The computer could not show the pairing prompt. Turn on notifications for Litz Audio on the computer, then try again.".into()),
+        PairOutcome::Cancelled => Err("Pairing unavailable; try again shortly".into()),
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +287,40 @@ mod tests {
                 .await
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_during_review_tells_the_computer() -> Result<()> {
+        let generated = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
+        let server = transport::server_endpoint(
+            transport::server_pairing(
+                generated.cert.der().to_vec(),
+                generated.signing_key.serialize_der(),
+                Arc::new(RwLock::new(Trust::default())),
+            )?,
+            "127.0.0.1:0".parse()?,
+        )?;
+        let pairing = Pairing::start(
+            crate::fresh_identity()?,
+            server.local_addr()?,
+            String::new(),
+            "Test phone".into(),
+        )?;
+        let connection = server.accept().await.ok_or("no phone")?.await?;
+        let mut control = Control::new(connection.accept_bi().await?);
+        control.read().await?;
+        control
+            .write(&Record::new(1, Message::PairNonce { nonce: [3; 32] }))
+            .await?;
+        control.read().await?;
+        pairing.cancel();
+        let closed = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await?;
+        assert!(matches!(
+            closed,
+            quinn::ConnectionError::ApplicationClosed(_)
+        ));
+        drop(pairing);
         Ok(())
     }
 }
