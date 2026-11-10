@@ -45,6 +45,10 @@ android/gradlew -p android checkKotlinFormat :app:testFossDebugUnitTest :app:tes
 
 Format Kotlin with `android/gradlew -p android formatKotlin`. If you change Android dependencies, refresh the lock and checksum files with `--write-locks --write-verification-metadata sha256` and commit them.
 
+### Translations
+
+The Android app is in English and Spanish. To add a language, copy each `strings.xml` from `android/app/src/main/res/values/`, `src/foss/res/values/` and `src/play/res/values/` into a `values-<language>` folder next to it (for example `values-pt-rBR`), translate every string, and add the language to `localeFilters` in `android/app/build.gradle.kts`. Keep placeholders such as `%1$s` as they are. Lint fails while a language is missing a string, so translate them all.
+
 ### Running a development build on NixOS
 
 The NixOS firewall blocks phones from reaching a `litzd` you start by hand; the NixOS module opens the port only for the installed service. Open it once in your configuration:

@@ -48,6 +48,10 @@ android {
         compose = true
         prefab = true
     }
+    androidResources {
+        generateLocaleConfig = true
+        localeFilters += listOf("en", "es")
+    }
     flavorDimensions += "store"
     productFlavors {
         create("foss") { dimension = "store" }

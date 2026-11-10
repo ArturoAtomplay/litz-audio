@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="support_title">Litz es gratis y sin anuncios</string>
+    <string name="support_body">Ayuda a que siga así</string>
+    <string name="support_action">Apoyar</string>
+    <string name="support_later">Más tarde</string>
+    <string name="support_setting">Apoya a Litz</string>
+    <string name="support_setting_description">Litz es gratis y no tiene anuncios. Una donación ayuda a que siga así.</string>
+</resources>
