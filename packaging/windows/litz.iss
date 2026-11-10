@@ -29,6 +29,7 @@ Source: "..\..\target\model\DeepFilterNet3_onnx.tar.gz"; DestDir: "{app}"
 Source: "..\..\packaging\android\icon-512.png"; DestDir: "{app}"; DestName: "litz.png"
 Source: "..\..\LICENSE"; DestDir: "{app}"
 Source: "..\..\THIRD_PARTY_NOTICES"; DestDir: "{app}"
+Source: "..\..\licenses\desktop.txt"; DestDir: "{app}"; DestName: "THIRD_PARTY_LICENSES.txt"
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Litz Audio"; ValueData: """{app}\litzd.exe"""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\LitzAudio"; Flags: uninsdeletekey dontcreatekey

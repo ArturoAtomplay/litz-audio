@@ -1,0 +1,10 @@
+Licenses of the Rust crates compiled into this program, as cargo-about found
+them. Each text keeps the copyright notices of the crates listed above it.
+{{#each licenses}}
+
+================================================================================
+{{{name}}}
+Used by: {{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+--------------------------------------------------------------------------------
+{{{text}}}
+{{/each}}

@@ -301,12 +301,16 @@ tasks.withType<Test>().configureEach {
 abstract class CopyNativeNotices : DefaultTask() {
     @get:InputFile abstract val projectLicense: RegularFileProperty
     @get:InputFile abstract val licenseException: RegularFileProperty
+    @get:InputFile abstract val thirdPartyNotices: RegularFileProperty
+    @get:InputFile abstract val thirdPartyLicenses: RegularFileProperty
     @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
     @get:Inject abstract val files: FileSystemOperations
     @TaskAction fun copy() {
         files.sync {
             from(projectLicense) { rename { "LITZ-LICENSE" } }
             from(licenseException) { rename { "LITZ-LICENSE-EXCEPTION" } }
+            from(thirdPartyNotices)
+            from(thirdPartyLicenses) { rename { "THIRD_PARTY_LICENSES" } }
             into(outputDirectory.dir("licenses"))
         }
     }
@@ -314,6 +318,8 @@ abstract class CopyNativeNotices : DefaultTask() {
 val nativeNotices = tasks.register<CopyNativeNotices>("copyNativeNotices") {
     projectLicense.set(rootProject.file("../LICENSE"))
     licenseException.set(rootProject.file("../LICENSE-EXCEPTION"))
+    thirdPartyNotices.set(rootProject.file("../THIRD_PARTY_NOTICES"))
+    thirdPartyLicenses.set(rootProject.file("../licenses/android.txt"))
     outputDirectory.set(layout.buildDirectory.dir("generated/native-notices"))
 }
 

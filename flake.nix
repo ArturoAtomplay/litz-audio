@@ -70,6 +70,7 @@
             install -Dm644 ${./packaging/linux/litzd.service.in} $out/lib/systemd/user/litzd.service
             install -Dm644 ${./LICENSE} $out/share/licenses/litz/LICENSE
             install -Dm644 ${./THIRD_PARTY_NOTICES} $out/share/licenses/litz/THIRD_PARTY_NOTICES
+            install -Dm644 ${./licenses/desktop.txt} $out/share/licenses/litz/THIRD_PARTY_LICENSES
             substituteInPlace $out/lib/systemd/user/litzd.service \
               --replace-fail '@BINDIR@' "$out/bin"
           '';
@@ -97,6 +98,7 @@
             pkgs.rustfmt
             pkgs.clippy
             pkgs.cargo-audit
+            pkgs.cargo-about
             pkgs.pipewire
             pkgs.wireplumber
             pkgs.pulseaudio

@@ -43,7 +43,12 @@ cargo test --workspace --all-features
 android/gradlew -p android checkKotlinFormat :app:testFossDebugUnitTest :app:testPlayDebugUnitTest :app:lintFossDebug :app:lintPlayDebug
 ```
 
-Format Kotlin with `android/gradlew -p android formatKotlin`. If you change Android dependencies, refresh the lock and checksum files with `--write-locks --write-verification-metadata sha256` and commit them.
+Format Kotlin with `android/gradlew -p android formatKotlin`. If you change Android dependencies, refresh the lock and checksum files with `--write-locks --write-verification-metadata sha256` and commit them. If you change Rust dependencies, regenerate the license lists that ship with the binaries:
+
+```sh
+cargo about generate --locked -m crates/desktop/Cargo.toml -o licenses/desktop.txt licenses/template.hbs
+cargo about generate --locked -m crates/android-native/Cargo.toml -o licenses/android.txt licenses/template.hbs
+```
 
 ### Translations
 

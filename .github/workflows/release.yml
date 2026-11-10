@@ -30,6 +30,7 @@ jobs:
           install -Dm755 target/dist/litzd "$root/bin/litzd"
           install -Dm644 target/model/DeepFilterNet3_onnx.tar.gz "$root/share/litz/DeepFilterNet3_onnx.tar.gz"
           install -Dm644 LICENSE THIRD_PARTY_NOTICES -t "$root/share/licenses/litz"
+          install -Dm644 licenses/desktop.txt "$root/share/licenses/litz/THIRD_PARTY_LICENSES"
           mkdir -p "$root/share/systemd/user"
           sed 's|@BINDIR@|%h/.local/bin|' packaging/linux/litzd.service.in > "$root/share/systemd/user/litzd.service"
           tar -C target/dist -czf "target/dist/litz-$version-linux-${{ matrix.arch }}.tar.gz" "$(basename "$root")"
