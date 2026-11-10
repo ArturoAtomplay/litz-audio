@@ -52,6 +52,6 @@ private fun computerRefused(reason: Code, direction: Int?): UiText =
         Code.BUSY -> UiText(R.string.failure_computer_busy)
         Code.UNAUTHORIZED -> UiText(R.string.failure_revoked)
         Code.REVISION_CONFLICT -> UiText(R.string.failure_outputs_changed)
-        Code.UNSUPPORTED,
-        Code.INVALID -> UiText(R.string.failure_computer_refused, listOf(reason.name))
+        Code.UNSUPPORTED -> UiText(R.string.failure_computer_unsupported)
+        Code.INVALID -> UiText(R.string.failure_computer_invalid)
     }

@@ -71,7 +71,7 @@
     <string name="volume">Volumen</string>
     <string name="volume_percent">%1$d %%</string>
     <string name="volume_listening">Volumen de escucha</string>
-    <string name="volume_boost_hint">Por encima de 100 %% amplifica el audio bajo.</string>
+    <string name="volume_boost_hint" formatted="false">Por encima de 100 % amplifica el audio bajo.</string>
     <string name="sound_from">Sonido desde</string>
     <string name="output_default">Salida predeterminada</string>
     <string name="output_default_description">Sigue a tu computadora cuando cambia de salida</string>
@@ -214,7 +214,8 @@
     <string name="failure_no_virtual_microphone">La computadora no tiene un micrófono virtual. Instala VB-CABLE en ella para usar este teléfono como micrófono.</string>
     <string name="failure_capture_unavailable">No se puede capturar el sonido de la computadora. Elige una salida de la computadora en Ajustes.</string>
     <string name="failure_computer_busy">La computadora está ocupada. Inténtalo de nuevo.</string>
-    <string name="failure_computer_refused">La computadora rechazó la solicitud (%1$s).</string>
+    <string name="failure_computer_unsupported">La computadora no admite esto. Actualiza Litz en ella.</string>
+    <string name="failure_computer_invalid">La computadora rechazó la solicitud. Actualiza Litz en ambos dispositivos.</string>
     <string name="failure_unexpected_reply">La computadora envió una respuesta inesperada. Actualiza Litz en ambos dispositivos.</string>
     <string name="failure_protocol_mismatch">Actualiza Litz en tu teléfono y en tu computadora; sus versiones no coinciden.</string>
     <string name="failure_identity_changed">La identidad de esta computadora cambió. Vincúlala de nuevo solo si confías en ella.</string>

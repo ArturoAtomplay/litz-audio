@@ -31,7 +31,7 @@ class FailureTextTest {
         assertEquals(R.string.failure_no_virtual_microphone, failureText(conflict, 0).id)
         assertEquals(R.string.failure_capture_unavailable, failureText(conflict, 1).id)
         assertEquals(
-            UiText(R.string.failure_computer_refused, listOf("UNSUPPORTED")),
+            UiText(R.string.failure_computer_unsupported),
             failureText(Failure.ComputerRefused(Code.UNSUPPORTED)),
         )
     }

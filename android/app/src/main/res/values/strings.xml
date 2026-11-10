@@ -74,7 +74,7 @@
     <string name="volume">Volume</string>
     <string name="volume_percent">%1$d%%</string>
     <string name="volume_listening">Listening volume</string>
-    <string name="volume_boost_hint">Above 100%% boosts quiet audio.</string>
+    <string name="volume_boost_hint" formatted="false">Above 100% boosts quiet audio.</string>
     <string name="sound_from">Sound from</string>
     <string name="output_default">Default output</string>
     <string name="output_default_description">Follows your computer when it changes output</string>
@@ -217,7 +217,8 @@
     <string name="failure_no_virtual_microphone">The computer has no virtual microphone. Install VB-CABLE on it to use this phone as a microphone.</string>
     <string name="failure_capture_unavailable">The computer\'s sound can\'t be captured. Choose a computer output in Settings.</string>
     <string name="failure_computer_busy">The computer is busy. Try again.</string>
-    <string name="failure_computer_refused">The computer refused the request (%1$s).</string>
+    <string name="failure_computer_unsupported">The computer does not support this. Update Litz on it.</string>
+    <string name="failure_computer_invalid">The computer rejected the request. Update Litz on both devices.</string>
     <string name="failure_unexpected_reply">The computer sent an unexpected reply. Update Litz on both devices.</string>
     <string name="failure_protocol_mismatch">Update Litz on both your phone and computer; their versions don\'t match.</string>
     <string name="failure_identity_changed">This computer\'s identity changed. Pair it again only if you trust it.</string>
