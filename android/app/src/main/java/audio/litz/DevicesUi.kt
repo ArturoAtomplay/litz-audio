@@ -832,7 +832,10 @@ private fun SettingsScreen(
                         context
                             .getSystemService(ClipboardManager::class.java)
                             .setPrimaryClip(
-                                ClipData.newPlainText(clipLabel, diagnosticText(sections))
+                                ClipData.newPlainText(
+                                    clipLabel,
+                                    diagnosticText(diagnostics(context.inEnglish(), ui, status)),
+                                )
                             )
                     },
                     modifier = Modifier.padding(horizontal = 8.dp),

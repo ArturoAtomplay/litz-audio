@@ -1,6 +1,7 @@
 package audio.litz
 
 import android.content.Context
+import android.content.res.Configuration
 import android.os.Build
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
@@ -218,6 +219,12 @@ private fun voiceRuntimeName(runtime: VoiceRuntime): Int =
         VoiceRuntime.BYPASSED -> R.string.diagnostics_voice_bypassed
         VoiceRuntime.RECOVERING -> R.string.diagnostics_voice_recovering
     }
+
+/** The copied report goes to the maintainer, so it is always in English. */
+internal fun Context.inEnglish(): Context =
+    createConfigurationContext(
+        Configuration(resources.configuration).apply { setLocale(Locale.ENGLISH) }
+    )
 
 internal fun diagnosticText(sections: List<DiagnosticSection>): String =
     sections.joinToString("\n") { section ->
