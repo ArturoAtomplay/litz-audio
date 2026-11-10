@@ -2,17 +2,12 @@ package audio.litz
 
 import android.app.Application
 import android.content.*
-import android.media.AudioDeviceCallback
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
@@ -22,8 +17,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.json.JSONObject
-
-@Immutable internal data class Device(val id: Int, val label: String)
 
 internal fun retryDelay(seen: Boolean, failures: Int): Long =
     if (seen) 2_000L shl failures.coerceIn(0, 3) else 60_000L
@@ -49,8 +42,6 @@ internal data class UiState(
     val message: String? = null,
     val ready: Boolean = false,
     val fingerprint: String = "",
-    val inputs: List<Device> = emptyList(),
-    val outputs: List<Device> = emptyList(),
     val nearby: List<NearbyComputer> = emptyList(),
     val saved: List<SavedComputer> = emptyList(),
     val selected: String? = null,
@@ -84,7 +75,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     @android.annotation.SuppressLint("StaticFieldLeak") private var service: SessionService? = null
     private var collection: Job? = null
     private var draft: PreferenceDraft? = null
-    private val audio = context.getSystemService(AudioManager::class.java)
     private val discovery =
         NearbyDiscovery(
             context,
@@ -204,13 +194,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     private var pairHandle = 0L
     private var pairJob: Job? = null
     private var discoveryUpdate = 0
-    private val deviceCallback =
-        object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = refreshDevices()
-
-            override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) =
-                refreshDevices()
-        }
     private val connection =
         object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -323,7 +306,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
-        audio.registerAudioDeviceCallback(deviceCallback, Handler(Looper.getMainLooper()))
         context.bindService(
             Intent(context, SessionService::class.java),
             connection,
@@ -349,7 +331,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                             desktop = identity.optString("endpoint"),
                         )
                     }
-                    refreshDevices()
                     reconnectIfIdle()
                 }
                 .onFailure { message(it.message ?: "Could not read settings/identity") }
@@ -532,34 +513,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    internal fun refreshDevices() {
-        fun list(flag: Int) =
-            audio
-                .getDevices(flag)
-                .filter { it.type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-                .map { Device(it.id, routeLabel(it)) }
-        mutable.update {
-            it.copy(
-                inputs = list(AudioManager.GET_DEVICES_INPUTS),
-                outputs = list(AudioManager.GET_DEVICES_OUTPUTS),
-            )
-        }
-    }
-
-    private fun routeLabel(device: AudioDeviceInfo): String =
-        when (device.type) {
-            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Phone speaker"
-            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Phone microphone"
-            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Phone earpiece"
-            AudioDeviceInfo.TYPE_WIRED_HEADSET,
-            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired headset"
-            AudioDeviceInfo.TYPE_USB_DEVICE,
-            AudioDeviceInfo.TYPE_USB_HEADSET -> "USB headset · ${device.productName}"
-            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-            AudioDeviceInfo.TYPE_BLE_HEADSET -> "Bluetooth · ${device.productName}"
-            else -> device.productName.toString()
-        }
-
     internal fun edit(settings: Settings) {
         val before = mutable.value.settings
         draft = (draft ?: PreferenceDraft()).withChanges(before, settings)
@@ -641,7 +594,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         if (networkCallbackRegistered) connectivity.unregisterNetworkCallback(networkCallback)
         cancelPair()
         collection?.cancel()
-        audio.unregisterAudioDeviceCallback(deviceCallback)
         context.unbindService(connection)
         service = null
     }
