@@ -219,14 +219,6 @@ impl Streaming<'_> {
                 return self.error(request_id, Code::Invalid).await;
             }
         };
-        if self.encoder.is_none()
-            && self.ports.capture.is_some()
-            && self.ports.route.is_some()
-            && capture_active(self.ports, true).await.is_err()
-        {
-            retire(Some(next));
-            return self.error(request_id, Code::RouteConflict).await;
-        }
         retire(self.voice.replace(next));
         self.receiver = Some(Receiver::try_new(config)?);
         self.reset_mic();
@@ -443,9 +435,6 @@ impl Streaming<'_> {
             retire(self.voice.take());
             self.receiver = None;
             self.reset_mic();
-            if self.encoder.is_none() && self.ports.capture.is_some() {
-                let _ = capture_active(self.ports, false).await;
-            }
             self.ports.reset.store(true, Ordering::Release);
         } else {
             if self.ports.capture.is_some()
@@ -512,9 +501,6 @@ impl Streaming<'_> {
             return Ok(Message::Error {
                 code: Code::RouteConflict,
             });
-        }
-        if self.receiver.is_some() {
-            capture_active(self.ports, true).await?;
         }
         self.default_retry = false;
         self.captured_frames = 0;
