@@ -16,13 +16,13 @@ import audio.litz.native.Failure
 import audio.litz.native.Pairing
 import audio.litz.native.PairingState
 import audio.litz.native.Route
+import audio.litz.native.SavedComputer
 import audio.litz.native.Settings
 import audio.litz.native.VoiceSettings
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import org.json.JSONObject
 
 internal fun retryDelay(seen: Boolean, failures: Int): Long =
     if (seen) 2_000L shl failures.coerceIn(0, 3) else 60_000L
@@ -47,7 +47,6 @@ internal data class UiState(
     val desktop: String = "",
     val message: UiText? = null,
     val ready: Boolean = false,
-    val fingerprint: String = "",
     val nearby: List<NearbyComputer> = emptyList(),
     val incompatible: List<NearbyComputer> = emptyList(),
     val saved: List<SavedComputer> = emptyList(),
@@ -328,7 +327,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             runCatching {
                     val preferences = Preferences(context).read()
                     val store = IdentityStore(context)
-                    val identity = withContext(Dispatchers.IO) { store.loadOrCreate() }
+                    val identity = withContext(Dispatchers.IO) { store.phone() }
                     val saved = withContext(Dispatchers.IO) { store.saved() }
                     val selected = withContext(Dispatchers.IO) { store.selectedFingerprint() }
                     mutable.update {
@@ -340,8 +339,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                             paired = selected != null,
                             saved = saved,
                             selected = selected,
-                            fingerprint = fingerprint(identity),
-                            desktop = identity.optString("endpoint"),
+                            desktop = identity.endpoint,
                         )
                     }
                     reconnectIfIdle()
@@ -529,14 +527,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         draft = (draft ?: PreferenceDraft()).withChanges(before, settings)
         mutable.update { it.copy(settings = settings, message = null) }
         viewModelScope.launch { Preferences(context).writeChanged(before, settings) }
-    }
-
-    private fun fingerprint(identity: JSONObject): String {
-        val certificate = identity.getJSONArray("desktop")
-        val bytes = ByteArray(certificate.length()) { certificate.getInt(it).toByte() }
-        return java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(":") {
-            "%02x".format(it.toInt() and 255)
-        }
     }
 
     internal fun connect() {

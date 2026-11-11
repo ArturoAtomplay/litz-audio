@@ -2,11 +2,11 @@ package audio.litz
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import audio.litz.native.Identity
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 import org.junit.Assert.*
 import org.junit.Test
@@ -20,14 +20,13 @@ class IdentityStoreTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val key = SecretKeySpec(ByteArray(32) { 7 }, "AES")
 
-    private fun store(
-        initial: Identity =
-            Identity(ByteArray(0), byteArrayOf(1, -56), byteArrayOf(2), "127.0.0.1:47165")
-    ) = IdentityStore(context, identityFactory = { initial }, keyProvider = { key })
+    private fun store() = IdentityStore(context, keyProvider = { key })
+
+    private fun file() = File(context.noBackupFilesDir, "identity.gcm")
 
     @Test
     fun concurrent_registry_operations_preserve_both_pins_and_selection() {
-        File(context.noBackupFilesDir, "identity.gcm").delete()
+        file().delete()
         val a = store()
         val b = store()
         val start = CountDownLatch(1)
@@ -54,35 +53,37 @@ class IdentityStoreTest {
             selection.get(5, TimeUnit.SECONDS)
             update.get(5, TimeUnit.SECONDS)
             assertEquals(pin, b.selectedFingerprint())
-            assertEquals("192.0.2.3:47165", b.loadOrCreate().getString("endpoint"))
+            assertEquals("192.0.2.3:47165", b.phone().endpoint)
             b.forget(pin)
             assertNull(a.selectedFingerprint())
             assertEquals("Two", a.saved().single().name)
-            assertFalse(
-                File(context.noBackupFilesDir, "identity.gcm").readText().contains("192.0.2")
-            )
+            assertFalse(file().readText().contains("192.0.2"))
         } finally {
             pool.shutdownNow()
         }
     }
 
     @Test
-    fun fresh_identity_carries_the_current_registry_shape() {
-        File(context.noBackupFilesDir, "identity.gcm").delete()
-        val identity = store().loadOrCreate()
-        assertEquals(1, identity.getInt("registry_version"))
-        assertEquals(0, identity.getJSONArray("known_desktops").length())
+    fun a_fresh_phone_has_an_identity_and_no_computers() {
+        file().delete()
+        val phone = store().phone()
+        assertTrue(phone.certificate.isNotEmpty() && phone.privateKey.isNotEmpty())
+        assertTrue(store().saved().isEmpty())
+        assertNull(store().readSelected())
+        assertArrayEquals(phone.certificate, store().phone().certificate)
     }
 
     @Test
-    fun bytes_keep_the_stored_format_and_come_back_unchanged() {
-        File(context.noBackupFilesDir, "identity.gcm").delete()
-        val identity = store().loadOrCreate()
-        assertEquals(200, identity.getJSONArray("certificate").getInt(1))
-        val phone = store().phone()
+    fun a_file_saved_by_0_1_0_keeps_its_identity_and_computers() {
+        val saved =
+            """{"desktop":[255],"certificate":[1,200],"private_key":[2],"endpoint":"192.0.2.1:47165","registry_version":1,"known_desktops":[{"name":"One","certificate":[255],"endpoint":"192.0.2.1:47165"}]}"""
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        file().writeBytes(cipher.iv + cipher.doFinal(saved.toByteArray()))
+        val phone = store().readSelected()!!
         assertArrayEquals(byteArrayOf(1, -56), phone.certificate)
-        assertEquals("127.0.0.1:47165", phone.endpoint)
-        store().remember("One", byteArrayOf(-1), "192.0.2.1:47165")
-        assertArrayEquals(byteArrayOf(-1), store().readSelected()!!.desktop)
+        assertArrayEquals(byteArrayOf(-1), phone.desktop)
+        assertEquals("192.0.2.1:47165", phone.endpoint)
+        assertEquals("One", store().saved().single().name)
     }
 }

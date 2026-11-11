@@ -4,11 +4,12 @@
 mod audio;
 mod engine;
 mod failure;
+mod identity;
 #[cfg(target_os = "android")]
 mod oboe;
 mod pairing;
 
-use failure::Failure;
+pub use identity::{Identity, create_identity};
 use litz_core::protocol::{
     Code, DesktopRoutes, Endpoint, InputSensitivity, Route, Suppression, VoiceRuntime,
     VoiceSettings,
@@ -98,26 +99,4 @@ struct DesktopRoutes {
     revision: u64,
     voice: VoiceSettings,
     suppression_algorithms: Vec<Suppression>,
-}
-
-/// The phone's own certificate and key, and the computer it is pinned to.
-#[derive(Clone, uniffi::Record)]
-pub struct Identity {
-    pub desktop: Vec<u8>,
-    pub certificate: Vec<u8>,
-    pub private_key: Vec<u8>,
-    pub endpoint: SocketAddr,
-}
-
-/// A new phone identity, not yet paired with any computer.
-#[uniffi::export]
-pub fn create_identity() -> Result<Identity, Failure> {
-    let phone = rcgen::generate_simple_self_signed(vec!["litz.local".into()])
-        .map_err(|error| Failure::of(&error))?;
-    Ok(Identity {
-        desktop: Vec::new(),
-        certificate: phone.cert.der().to_vec(),
-        private_key: phone.signing_key.serialize_der(),
-        endpoint: SocketAddr::from(([0, 0, 0, 0], litz_core::protocol::PORT)),
-    })
 }

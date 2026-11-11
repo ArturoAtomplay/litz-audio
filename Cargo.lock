@@ -1146,6 +1146,8 @@ dependencies = [
  "quinn",
  "rcgen",
  "rtrb",
+ "serde",
+ "serde_json",
  "tokio",
  "uniffi",
 ]
