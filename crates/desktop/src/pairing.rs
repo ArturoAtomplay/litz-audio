@@ -324,7 +324,7 @@ mod tests {
         hub.approve(&one, "Duplicate", None).await?;
         assert_eq!(trust.read().unwrap().phones.len(), 2);
         let server = transport::server_endpoint(
-            transport::server(cert.clone(), key, trust)?,
+            transport::server(cert.clone(), key)?,
             "127.0.0.1:0".parse()?,
         )?;
         let mut a = transport::client_endpoint("127.0.0.1:0".parse()?)?;

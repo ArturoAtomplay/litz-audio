@@ -21,11 +21,8 @@ fn identity() -> (Vec<u8>, Vec<u8>) {
 async fn callback_burst_yields_to_transport_without_dropping_frames() -> Result<()> {
     let (cert, key) = identity();
     let (phone, phone_key) = identity();
-    let trust = Arc::new(RwLock::new(
-        Trust::default().approve(&phone, "Phone", 0, None).unwrap(),
-    ));
     let server = transport::server_endpoint(
-        transport::server(cert.clone(), key, trust)?,
+        transport::server(cert.clone(), key)?,
         "127.0.0.1:0".parse()?,
     )?;
     let mut client = transport::client_endpoint("127.0.0.1:0".parse()?)?;
@@ -93,7 +90,7 @@ async fn exercise() -> Result<()> {
     let session = Arc::new(tokio::sync::Mutex::new(Session::new(0)));
     let occupied = Arc::new(tokio::sync::Mutex::new(false));
     let server = transport::server_endpoint(
-        transport::server(cert.clone(), key, trust.clone())?,
+        transport::server(cert.clone(), key)?,
         "127.0.0.1:0".parse()?,
     )?;
     let addr = server.local_addr()?;
@@ -172,8 +169,6 @@ async fn exercise() -> Result<()> {
         Message::Status { .. }
     ));
     assert!(trust.read().unwrap().contains(&phone));
-    // An unpinned certificate is refused: TLS 1.3 client-auth failure surfaces
-    // as a post-handshake close, not a failed local connect.
     let (stranger, stranger_key) = identity();
     let mut stranger_client = transport::client_endpoint("127.0.0.1:0".parse()?)?;
     stranger_client.set_default_client_config(transport::client(
@@ -181,12 +176,13 @@ async fn exercise() -> Result<()> {
         stranger,
         stranger_key,
     )?);
-    let stranger_connection = stranger_client.connect(addr, "litz.local")?.await?;
-    assert!(
-        tokio::time::timeout(Duration::from_secs(3), stranger_connection.closed())
-            .await
-            .is_ok()
-    );
+    let (_stranger_connection, mut stranger_control) = connect(&stranger_client, addr).await?;
+    assert!(matches!(
+        open_session(&mut stranger_control).await?,
+        Message::Error {
+            code: Code::Unauthorized
+        }
+    ));
     control
         .write(&Record::new(3, Message::Capabilities { desktop: None }))
         .await?;

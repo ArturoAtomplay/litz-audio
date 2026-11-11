@@ -120,11 +120,7 @@ async fn listen(
     mut stop: oneshot::Receiver<()>,
 ) -> transport::Result<()> {
     let trust = Arc::new(RwLock::new(identity.trust.clone()));
-    let config = transport::server_pairing(
-        identity.certificate.clone(),
-        identity.private_key.clone(),
-        trust.clone(),
-    )?;
+    let config = transport::server(identity.certificate.clone(), identity.private_key.clone())?;
     let endpoint = transport::server_endpoint(config, identity.bind)?;
     eprintln!("litzd: secure engine listening on {} (UDP)", identity.bind);
     let identity = Arc::new(std::sync::Mutex::new(identity));
@@ -482,4 +478,105 @@ pub async fn apply_route(ports: &mut Ports, route: Route) -> transport::Result<b
         return Ok(false);
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use litz_core::session::Trust;
+
+    fn ports() -> transport::Result<Ports> {
+        #[cfg(target_os = "linux")]
+        let commands = pipewire::channel::channel().0;
+        #[cfg(windows)]
+        let commands = std::sync::mpsc::sync_channel(1).0;
+        Ok(Ports {
+            mic: litz_core::pcm::channel().0,
+            mic_available: Arc::default(),
+            capture: None,
+            capture_fault: Arc::default(),
+            demand: rtrb::RingBuffer::new(1).1,
+            wake: Wake::try_new()?,
+            reset: Arc::default(),
+            route: None,
+            resolved: None,
+            revision: 0,
+            voice: VoiceSettings::default(),
+            commands,
+            command_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+        })
+    }
+
+    fn id() -> (Vec<u8>, Vec<u8>) {
+        let identity = rcgen::generate_simple_self_signed(vec!["litz.local".into()]).unwrap();
+        (
+            identity.cert.der().to_vec(),
+            identity.signing_key.serialize_der(),
+        )
+    }
+
+    #[tokio::test]
+    async fn an_unknown_certificate_is_refused_and_a_paired_one_is_served() -> transport::Result<()>
+    {
+        let (cert, key) = id();
+        let (phone, phone_key) = id();
+        let (stranger, stranger_key) = id();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let paired = Trust::default()
+            .approve(&phone, "Phone", now, None)
+            .map_err(|_| "approve")?;
+        let hub = Hub::new(
+            Arc::new(std::sync::Mutex::new(Identity {
+                registry_version: 1,
+                certificate: cert.clone(),
+                private_key: key.clone(),
+                trust: paired.clone(),
+                bind: "127.0.0.1:0".parse()?,
+            })),
+            Arc::new(RwLock::new(paired)),
+            PathBuf::from("never-written"),
+        );
+        let ports = Arc::new(tokio::sync::Mutex::new(ports()?));
+        let server = transport::server_endpoint(
+            transport::server(cert.clone(), key)?,
+            "127.0.0.1:0".parse()?,
+        )?;
+        let address = server.local_addr()?;
+        let listener = tokio::spawn(async move {
+            while let Some(incoming) = server.accept().await {
+                let (hub, ports) = (hub.clone(), ports.clone());
+                tokio::spawn(async move {
+                    if let Ok(c) = incoming.await {
+                        let _ = serve_connection(&c, &hub, &ports).await;
+                    }
+                });
+            }
+        });
+        let first_reply = |certificate: Vec<u8>, key: Vec<u8>| {
+            let desktop = cert.clone();
+            async move {
+                let mut client = transport::client_endpoint("127.0.0.1:0".parse()?)?;
+                client.set_default_client_config(transport::client(desktop, certificate, key)?);
+                let connection = client.connect(address, "litz.local")?.await?;
+                let mut control = Control::new(connection.open_bi().await?);
+                control.write(&Record::new(1, Message::GetState {})).await?;
+                let reply = tokio::time::timeout(Duration::from_secs(5), control.read()).await??;
+                Ok::<_, transport::Error>(reply.message)
+            }
+        };
+        assert!(matches!(
+            first_reply(stranger, stranger_key).await?,
+            Message::Error {
+                code: Code::Unauthorized
+            }
+        ));
+        assert!(matches!(
+            first_reply(phone, phone_key).await?,
+            Message::Status { .. }
+        ));
+        listener.abort();
+        Ok(())
+    }
 }

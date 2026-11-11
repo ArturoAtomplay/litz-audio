@@ -238,19 +238,13 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use litz_core::session::Trust;
-    use std::sync::RwLock;
 
     /// A computer that answers `outcome` without asking anyone.
     fn computer(outcome: PairOutcome) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
         let generated = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
         let desktop = generated.cert.der().to_vec();
         let server = transport::server_endpoint(
-            transport::server_pairing(
-                desktop,
-                generated.signing_key.serialize_der(),
-                Arc::new(RwLock::new(Trust::default())),
-            )?,
+            transport::server(desktop, generated.signing_key.serialize_der())?,
             "127.0.0.1:0".parse()?,
         )?;
         let address = server.local_addr()?;
@@ -381,10 +375,9 @@ mod tests {
     async fn cancelling_during_review_tells_the_computer() -> Result<()> {
         let generated = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
         let server = transport::server_endpoint(
-            transport::server_pairing(
+            transport::server(
                 generated.cert.der().to_vec(),
                 generated.signing_key.serialize_der(),
-                Arc::new(RwLock::new(Trust::default())),
             )?,
             "127.0.0.1:0".parse()?,
         )?;

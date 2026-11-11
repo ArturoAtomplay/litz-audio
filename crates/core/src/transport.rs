@@ -1,17 +1,11 @@
-use crate::{
-    protocol::{ALPN, MAX_CONTROL, MAX_DATAGRAM, Record},
-    session::Trust,
-};
+use crate::protocol::{ALPN, MAX_CONTROL, MAX_DATAGRAM, Record};
 use rustls::{
     RootCertStore,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
     server::danger::{ClientCertVerified, ClientCertVerifier},
 };
-use std::{
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -66,15 +60,12 @@ fn limits() -> Arc<quinn::TransportConfig> {
     Arc::new(c)
 }
 
-/// During the pairing prompt only, validate a self-signed phone certificate with
-/// webpki and require TLS proof of its private key. Authorization is granted by
-/// the human approval step, never by this provisional certificate. Afterwards
-/// only the persisted pin is accepted.
+/// Accepts any single self-signed phone certificate and requires TLS proof of
+/// its private key, because a phone may ask to pair at any time. This grants
+/// nothing: the daemon authorizes the pinned certificate after the handshake,
+/// in `serve_connection`, and again on every request.
 #[derive(Debug)]
-struct PhoneVerifier {
-    trust: Arc<RwLock<Trust>>,
-    pairing: bool,
-}
+struct PhoneVerifier;
 impl ClientCertVerifier for PhoneVerifier {
     fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
         &[]
@@ -85,11 +76,7 @@ impl ClientCertVerifier for PhoneVerifier {
         chain: &[CertificateDer<'_>],
         now: UnixTime,
     ) -> std::result::Result<ClientCertVerified, rustls::Error> {
-        let trust = self
-            .trust
-            .read()
-            .map_err(|_| rustls::Error::General("trust unavailable".into()))?;
-        if !chain.is_empty() || !(self.pairing || trust.contains(cert.as_ref())) {
+        if !chain.is_empty() {
             return Err(rustls::Error::General("unauthorized phone".into()));
         }
         let mut roots = RootCertStore::empty();
@@ -120,31 +107,10 @@ impl ClientCertVerifier for PhoneVerifier {
     }
 }
 
-pub fn server(
-    cert: Vec<u8>,
-    key: Vec<u8>,
-    trust: Arc<RwLock<Trust>>,
-) -> Result<quinn::ServerConfig> {
-    server_config(cert, key, trust, false)
-}
-
-pub fn server_pairing(
-    cert: Vec<u8>,
-    key: Vec<u8>,
-    trust: Arc<RwLock<Trust>>,
-) -> Result<quinn::ServerConfig> {
-    server_config(cert, key, trust, true)
-}
-
-fn server_config(
-    cert: Vec<u8>,
-    key: Vec<u8>,
-    trust: Arc<RwLock<Trust>>,
-    pairing: bool,
-) -> Result<quinn::ServerConfig> {
+pub fn server(cert: Vec<u8>, key: Vec<u8>) -> Result<quinn::ServerConfig> {
     let mut tls = rustls::ServerConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_client_cert_verifier(Arc::new(PhoneVerifier { trust, pairing }))
+        .with_client_cert_verifier(Arc::new(PhoneVerifier))
         .with_single_cert(
             vec![CertificateDer::from(cert)],
             PrivatePkcs8KeyDer::from(key).into(),
