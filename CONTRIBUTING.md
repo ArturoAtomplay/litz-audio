@@ -47,7 +47,7 @@ Format Kotlin with `android/gradlew -p android formatKotlin`. If you change Andr
 
 ```sh
 cargo about generate --locked -m crates/desktop/Cargo.toml -o licenses/desktop.txt licenses/template.hbs
-cargo about generate --locked -m crates/android-native/Cargo.toml -o licenses/android.txt licenses/template.hbs
+cargo about generate --locked -m crates/phone/Cargo.toml -o licenses/android.txt licenses/template.hbs
 ```
 
 ### Translations
@@ -72,7 +72,7 @@ sudo nixos-firewall-tool open udp 47165
 
 - `crates/core/`: protocol, media and transport shared by all platforms.
 - `crates/desktop/`: the `litzd` daemon and audio backends.
-- `crates/android-native/`: the Rust audio engine and Oboe adapter for Android.
+- `crates/phone/`: the phone's audio engine and the API the app calls. Its `src/android/` holds the only Android-specific code, the Oboe adapter.
 - `android/app/src/main/`: the Android app. `src/foss/` and `src/play/` hold the only flavor-specific code: the Google Play flavor adds a banner ad and the consent form, and the foss flavor must never depend on proprietary libraries.
 
 ## License

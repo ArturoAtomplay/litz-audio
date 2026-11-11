@@ -1,3 +1,4 @@
+use crate::platform::Device;
 use litz_core::media::receiver::{CHUNK, Receiver};
 use litz_core::protocol::MAX_DATAGRAM;
 use litz_core::wake::{Wake, WakeListener};
@@ -176,35 +177,10 @@ pub struct AudioInfo {
     pub output_buffer: i32,
     pub input_xruns: i32,
     pub output_xruns: i32,
+    /// Bit 0 is set once the input failed or moved to another device, bit 1
+    /// for the output.
     pub error: i32,
     pub source: i32,
-}
-
-#[cfg(target_os = "android")]
-use crate::oboe::Device;
-
-/// Off Android there is no audio device to open; the engine still builds
-/// there so its tests and the app's JVM tests can run.
-#[cfg(not(target_os = "android"))]
-enum Device {}
-#[cfg(not(target_os = "android"))]
-impl Device {
-    unsafe fn open(
-        _bridge: *mut c_void,
-        _mic: bool,
-        _playback: bool,
-        _input: i32,
-        _output: i32,
-        _source: i32,
-    ) -> Option<Self> {
-        None
-    }
-    fn start(&self) -> bool {
-        match *self {}
-    }
-    fn info(&self) -> AudioInfo {
-        match *self {}
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, uniffi::Record)]
@@ -304,15 +280,18 @@ impl Drop for Audio {
     }
 }
 
-// Native C ABI callbacks on the realtime thread: no allocation, lock or log.
+// What a device calls on its realtime threads with the pointer it was opened
+// with: no allocation, lock or log. Capture is 48 kHz mono and render 48 kHz
+// interleaved stereo. Calls for one direction never overlap, and none runs
+// once the device is dropped.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn litz_capture(pointer: *mut c_void, samples: *const f32, frames: i32) {
-    // SAFETY: C++ owns a live Bridge until close has joined all callbacks.
+    // SAFETY: the Bridge outlives the device, which joins its callbacks when dropped.
     let b = unsafe { &*pointer.cast::<Bridge>() };
     if !b.active.load(Ordering::Acquire) || frames <= 0 {
         return;
     }
-    // SAFETY: C++ supplies frames readable mono samples for the duration of this callback.
+    // SAFETY: the device supplies frames readable mono samples for the duration of this callback.
     let input = unsafe { std::slice::from_raw_parts(samples, frames as usize) };
     // SAFETY: capture callbacks are serialized and are the only users of this field.
     let capture = unsafe { &mut *b.capture.get() };
@@ -332,12 +311,12 @@ unsafe extern "C" fn litz_capture(pointer: *mut c_void, samples: *const f32, fra
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn litz_render(pointer: *mut c_void, samples: *mut f32, frames: i32) {
-    // SAFETY: C++ owns a live Bridge until close has joined all callbacks.
+    // SAFETY: the Bridge outlives the device, which joins its callbacks when dropped.
     let b = unsafe { &*pointer.cast::<Bridge>() };
     if frames <= 0 {
         return;
     }
-    // SAFETY: C++ supplies space for frames writable stereo samples.
+    // SAFETY: the device supplies space for frames writable stereo samples.
     let out = unsafe { std::slice::from_raw_parts_mut(samples, frames as usize * 2) };
     if !b.active.load(Ordering::Acquire) {
         out.fill(0.0);

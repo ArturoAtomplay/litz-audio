@@ -209,7 +209,7 @@
     <string name="address_timed_out">Computer address lookup timed out. Tap Refresh to try again.</string>
     <string name="address_failed">Computer address lookup failed (%1$d). Tap Refresh to try again.</string>
 
-    <!-- Failures reported by the native engine; codes in crates/android-native/failure-codes.txt -->
+    <!-- Failures reported by the native engine -->
     <string name="failure_cancelled">Stopped</string>
     <string name="failure_connect_timeout">Computer is unavailable. Check that Litz is running on it.</string>
     <string name="failure_control_timeout">The computer did not answer in time.</string>

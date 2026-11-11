@@ -86,7 +86,7 @@ android {
     }
     externalNativeBuild {
         cmake {
-            path = file("../../crates/android-native/CMakeLists.txt")
+            path = file("../../crates/phone/src/android/CMakeLists.txt")
             version = cmakeVersionName
         }
     }
@@ -148,7 +148,7 @@ abstract class BuildRust : DefaultTask() {
         val sdkCmake = sdkCmakeBin.resolve("cmake$exe")
         abis.get().keys.forEach { abi ->
         val arguments = mutableListOf("cargo", "ndk", "-t", abi,
-            "-P", minimumApi.get().toString(), "build", "--locked", "-p", "litz-android",
+            "-P", minimumApi.get().toString(), "build", "--locked", "-p", "litz-phone",
             "--target-dir", target.absolutePath)
         if (releaseBuild.get()) arguments += "--release"
         exec.exec {
@@ -172,9 +172,9 @@ abstract class BuildRust : DefaultTask() {
         val profile = if (releaseBuild.get()) "release" else "debug"
         abis.get()
             .forEach { (abi, triple) ->
-                val source = target.resolve(triple).resolve(profile).resolve("liblitz_android.a")
+                val source = target.resolve(triple).resolve(profile).resolve("liblitz_phone.a")
                 check(source.isFile) { "cargo did not produce $source" }
-                val destination = output.resolve(abi).resolve("liblitz_android.a")
+                val destination = output.resolve(abi).resolve("liblitz_phone.a")
                 destination.parentFile.mkdirs()
                 source.copyTo(destination, overwrite = true)
             }
@@ -204,7 +204,7 @@ fun registerRustTask(name: String, release: Boolean) = tasks.register<BuildRust>
         androidComponents.sdkComponents.sdkDirectory.map { it.file("cmake/$cmakeVersionName/source.properties") })
     cmakeMakeProgram.set(providers.environmentVariable("LITZ_CMAKE_MAKE_PROGRAM"))
     releaseBuild.set(release)
-    rustInputs.from(fileTree("../../crates/android-native"), fileTree("../../crates/core"),
+    rustInputs.from(fileTree("../../crates/phone"), fileTree("../../crates/core"),
         file("../../Cargo.toml"), file("../../Cargo.lock"), file("../../rust-toolchain.toml"), fileTree("../../.cargo"))
 }
 
@@ -249,8 +249,8 @@ abstract class GenerateBindings : DefaultTask() {
 // always matches the native library it loads.
 fun registerBindingsTask(name: String, rustTask: TaskProvider<BuildRust>) =
     tasks.register<GenerateBindings>(name) {
-        library.from(rustTask.flatMap { it.outputDirectory.file("${nativeAbis.keys.first()}/liblitz_android.a") })
-        generatorInputs.from(file("../../crates/android-native/uniffi.toml"), fileTree("../../crates/uniffi-bindgen"))
+        library.from(rustTask.flatMap { it.outputDirectory.file("${nativeAbis.keys.first()}/liblitz_phone.a") })
+        generatorInputs.from(file("../../crates/phone/uniffi.toml"), fileTree("../../crates/uniffi-bindgen"))
         outputDirectory.set(layout.buildDirectory.dir("generated/uniffi/${rustTask.name}"))
         repository.set(rootProject.layout.projectDirectory.dir(".."))
         targetDirectory.set(layout.buildDirectory.dir("rust-host-target"))
@@ -271,7 +271,7 @@ abstract class BuildHostLibrary : DefaultTask() {
     @TaskAction fun build() {
         exec.exec {
             workingDir(repository.get().asFile)
-            commandLine("cargo", "rustc", "--locked", "-p", "litz-android", "--lib",
+            commandLine("cargo", "rustc", "--locked", "-p", "litz-phone", "--lib",
                 "--crate-type", "cdylib", "--target-dir", targetDirectory.get().asFile.absolutePath)
             environment(toolEnvironment.get())
         }
@@ -280,7 +280,7 @@ abstract class BuildHostLibrary : DefaultTask() {
 
 // JVM tests call the real bridge through JNA, against a host build of the library.
 val hostLibrary = tasks.register<BuildHostLibrary>("buildHostLibrary") {
-    rustInputs.from(fileTree("../../crates/android-native"), fileTree("../../crates/core"),
+    rustInputs.from(fileTree("../../crates/phone"), fileTree("../../crates/core"),
         file("../../Cargo.toml"), file("../../Cargo.lock"), file("../../rust-toolchain.toml"))
     repository.set(rootProject.layout.projectDirectory.dir(".."))
     targetDirectory.set(layout.buildDirectory.dir("rust-host-library"))

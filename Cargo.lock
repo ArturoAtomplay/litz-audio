@@ -1137,22 +1137,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litz-android"
-version = "0.1.0"
-dependencies = [
- "getrandom 0.4.3",
- "libc",
- "litz-core",
- "quinn",
- "rcgen",
- "rtrb",
- "serde",
- "serde_json",
- "tokio",
- "uniffi",
-]
-
-[[package]]
 name = "litz-core"
 version = "0.1.0"
 dependencies = [
@@ -1170,6 +1154,22 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+]
+
+[[package]]
+name = "litz-phone"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+ "litz-core",
+ "quinn",
+ "rcgen",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uniffi",
 ]
 
 [[package]]

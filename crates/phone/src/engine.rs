@@ -59,6 +59,7 @@ impl Default for Settings {
     }
 }
 /// Whether `source` is a recording mode the engine accepts; 0 lets it choose.
+/// Modes keep the numbers of Android's `MediaRecorder.AudioSource`.
 #[uniffi::export]
 pub fn is_capture_source(source: i32) -> bool {
     [0, 1, 5, 6, 7, 9, 10].contains(&source)
@@ -285,8 +286,7 @@ impl Engine {
 
 impl Engine {
     fn start(identity: Identity) -> Result<Self> {
-        #[cfg(target_os = "android")]
-        crate::oboe::log_panics();
+        crate::platform::log_panics();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -299,8 +299,7 @@ impl Engine {
             .name("litz-engine".into())
             .stack_size(4 * 1024 * 1024)
             .spawn(move || {
-                #[cfg(target_os = "android")]
-                crate::oboe::raise_thread_priority();
+                crate::platform::raise_thread_priority();
                 runtime.block_on(Box::pin(run(identity, rx, stopped, worker_cancelled)));
             })?;
         Ok(Self {

@@ -1,5 +1,5 @@
 [package]
-name = "litz-android"
+name = "litz-phone"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,5 +19,6 @@ rtrb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uniffi.workspace = true
-[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+
+[target.'cfg(target_os = "android")'.dependencies]
 libc = "=0.2.191"

@@ -1,13 +1,20 @@
-//! The API the Android app calls. UniFFI generates its Kotlin side.
-#![cfg(any(target_os = "android", target_os = "linux"))]
+//! The phone's side of Litz and the API its app calls. UniFFI generates the
+//! app's side of that API.
 #![warn(clippy::undocumented_unsafe_blocks)]
+#[cfg(target_os = "android")]
+mod android;
 mod audio;
 mod engine;
 mod failure;
+#[cfg(not(target_os = "android"))]
+mod host;
 mod identity;
-#[cfg(target_os = "android")]
-mod oboe;
 mod pairing;
+
+#[cfg(target_os = "android")]
+use android as platform;
+#[cfg(not(target_os = "android"))]
+use host as platform;
 
 pub use identity::{Identity, create_identity};
 use litz_core::protocol::{
