@@ -11,12 +11,29 @@ use std::{
 
 const BLOCK: usize = 2048;
 const PACKETS: usize = 32;
+/// How much microphone audio may wait for the engine before a callback drops
+/// its block. Sized in time, not callbacks: bursts range from 1 to 40 ms.
+const CAPTURE_MS: usize = 200;
 
 #[derive(Clone, Copy)]
 pub struct Captured {
     pub samples: [f32; BLOCK],
     pub len: usize,
     pub at: Instant,
+    /// Audio was dropped just before this block.
+    pub gap: bool,
+}
+/// One capture callback's samples in the sample ring.
+struct Block {
+    len: usize,
+    at: Instant,
+    gap: bool,
+}
+/// Owned by the capture callback.
+struct Capture {
+    samples: Producer<f32>,
+    blocks: Producer<Block>,
+    gap: bool,
 }
 struct Packet {
     len: usize,
@@ -67,12 +84,11 @@ struct Render {
 }
 
 struct Bridge {
-    capture: UnsafeCell<Producer<Captured>>,
+    capture: UnsafeCell<Capture>,
     render: UnsafeCell<Render>,
     wake: Wake,
     origin: Instant,
     active: AtomicBool,
-    overflow: AtomicBool,
     gain: AtomicU32,
     callback_frames: AtomicU64,
     late: AtomicU64,
@@ -81,20 +97,42 @@ struct Bridge {
 }
 
 struct Ends {
-    capture: Consumer<Captured>,
+    samples: Consumer<f32>,
+    blocks: Consumer<Block>,
     packets: Producer<Packet>,
     installs: Producer<Option<Box<Receiver>>>,
     retired: Consumer<Box<Receiver>>,
 }
 
+impl Ends {
+    fn capture(&mut self) -> Option<Captured> {
+        let block = self.blocks.pop().ok()?;
+        let mut captured = Captured {
+            samples: [0.0; BLOCK],
+            len: block.len,
+            at: block.at,
+            gap: block.gap,
+        };
+        self.samples
+            .pop_entire_slice(&mut captured.samples[..block.len])
+            .ok()?;
+        Some(captured)
+    }
+}
+
 impl Bridge {
     fn try_new() -> std::io::Result<(Box<Self>, Ends)> {
-        let (capture_tx, capture) = RingBuffer::new(32);
+        let (samples_tx, samples) = RingBuffer::new(CAPTURE_MS * 48);
+        let (blocks_tx, blocks) = RingBuffer::new(CAPTURE_MS);
         let (packets, packets_rx) = RingBuffer::new(PACKETS);
         let (installs, installs_rx) = RingBuffer::new(4);
         let (retired_tx, retired) = RingBuffer::new(4);
         let bridge = Box::new(Self {
-            capture: UnsafeCell::new(capture_tx),
+            capture: UnsafeCell::new(Capture {
+                samples: samples_tx,
+                blocks: blocks_tx,
+                gap: false,
+            }),
             render: UnsafeCell::new(Render {
                 packets: packets_rx,
                 installs: installs_rx,
@@ -107,7 +145,6 @@ impl Bridge {
             wake: Wake::try_new()?,
             origin: Instant::now(),
             active: AtomicBool::new(false),
-            overflow: AtomicBool::new(false),
             gain: AtomicU32::new(1.0f32.to_bits()),
             callback_frames: AtomicU64::new(0),
             late: AtomicU64::new(0),
@@ -115,7 +152,8 @@ impl Bridge {
             buffer_us: AtomicU64::new(0),
         });
         let ends = Ends {
-            capture,
+            samples,
+            blocks,
             packets,
             installs,
             retired,
@@ -220,13 +258,13 @@ impl Audio {
         self.bridge.active.store(false, Ordering::Release);
     }
     pub fn fault(&self) -> bool {
-        self.bridge.overflow.load(Ordering::Acquire) || self.info().error != 0
+        self.info().error != 0
     }
     pub fn set_playback_gain(&self, gain: f32) {
         self.bridge.gain.store(gain.to_bits(), Ordering::Relaxed);
     }
     pub fn capture(&mut self) -> Option<Captured> {
-        self.ends.capture.pop().ok()
+        self.ends.capture()
     }
     pub fn listen(&mut self, receiver: Option<Box<Receiver>>) -> litz_core::transport::Result<()> {
         self.collect();
@@ -289,7 +327,7 @@ impl Drop for Audio {
 unsafe extern "C" fn litz_capture(pointer: *mut c_void, samples: *const f32, frames: i32) {
     // SAFETY: C++ owns a live Bridge until close has joined all callbacks.
     let b = unsafe { &*pointer.cast::<Bridge>() };
-    if !b.active.load(Ordering::Acquire) || b.overflow.load(Ordering::Acquire) || frames <= 0 {
+    if !b.active.load(Ordering::Acquire) || frames <= 0 {
         return;
     }
     // SAFETY: C++ supplies frames readable mono samples for the duration of this callback.
@@ -297,16 +335,15 @@ unsafe extern "C" fn litz_capture(pointer: *mut c_void, samples: *const f32, fra
     // SAFETY: capture callbacks are serialized and are the only users of this field.
     let capture = unsafe { &mut *b.capture.get() };
     for chunk in input.chunks(BLOCK) {
-        let mut block = Captured {
-            samples: [0.0; BLOCK],
+        if capture.blocks.is_full() || capture.samples.push_entire_slice(chunk).is_err() {
+            capture.gap = true;
+            continue;
+        }
+        let _ = capture.blocks.push(Block {
             len: chunk.len(),
             at: Instant::now(),
-        };
-        block.samples[..chunk.len()].copy_from_slice(chunk);
-        if capture.push(block).is_err() {
-            b.overflow.store(true, Ordering::Release);
-            break;
-        }
+            gap: std::mem::take(&mut capture.gap),
+        });
     }
     b.wake.signal();
 }
@@ -320,7 +357,7 @@ unsafe extern "C" fn litz_render(pointer: *mut c_void, samples: *mut f32, frames
     }
     // SAFETY: C++ supplies space for frames writable stereo samples.
     let out = unsafe { std::slice::from_raw_parts_mut(samples, frames as usize * 2) };
-    if !b.active.load(Ordering::Acquire) || b.overflow.load(Ordering::Acquire) {
+    if !b.active.load(Ordering::Acquire) {
         out.fill(0.0);
         return;
     }
@@ -434,6 +471,62 @@ mod tests {
         render(&mut bridge, &mut out);
         assert!(ends.retired.pop().is_ok());
         assert!(out.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn a_capture_overrun_drops_that_audio_and_playback_goes_on() {
+        let (mut bridge, mut ends) = Bridge::try_new().unwrap();
+        bridge.active.store(true, Ordering::Release);
+        let pointer = (&mut *bridge as *mut Bridge).cast::<c_void>();
+        let burst = [0.25f32; 96];
+        // SAFETY: the live bridge has exclusive callback access; burst holds 96 samples.
+        let capture = || unsafe { litz_capture(pointer, burst.as_ptr(), burst.len() as i32) };
+        // Half a second of microphone bursts while the engine reads nothing.
+        for _ in 0..250 {
+            capture();
+        }
+        let config = Config {
+            stream: Stream::Playback,
+            epoch: 1,
+        };
+        let mut encoder = Encoder::try_new(config).unwrap();
+        ends.installs
+            .push(Some(Box::new(Receiver::try_new(config).unwrap())))
+            .unwrap();
+        let mut out = [0.0; 480 * 2];
+        let mut packet = Packet {
+            len: 0,
+            arrival: 0.0,
+            data: [0; MAX_DATAGRAM],
+        };
+        let mut heard = false;
+        for _ in 0..30 {
+            packet.len = encoder
+                .encode(&[0.3; FRAME * 2], &mut packet.data, MAX_DATAGRAM)
+                .unwrap();
+            packet.arrival = bridge.origin.elapsed().as_secs_f64();
+            ends.packets
+                .push(Packet {
+                    data: packet.data,
+                    ..packet
+                })
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            render(&mut bridge, &mut out);
+            heard |= out.iter().any(|s| s.abs() > 0.05);
+        }
+        assert!(heard, "a microphone overrun silenced playback");
+        let mut kept = 0;
+        while let Some(block) = ends.capture() {
+            assert!(!block.gap);
+            kept += block.len;
+        }
+        assert!(kept > 0 && kept <= CAPTURE_MS * 48);
+        capture();
+        let next = ends.capture().unwrap();
+        assert!(next.gap && next.len == burst.len());
+        capture();
+        assert!(!ends.capture().unwrap().gap);
     }
 
     #[test]

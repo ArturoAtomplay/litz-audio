@@ -429,6 +429,9 @@ impl Media {
             if self.capture_block.is_none() {
                 self.capture_block = audio.capture();
                 self.capture_offset = 0;
+                if self.capture_block.as_ref().is_some_and(|block| block.gap) {
+                    self.captured_len = 0;
+                }
             }
             let Some(block) = &self.capture_block else {
                 break;
