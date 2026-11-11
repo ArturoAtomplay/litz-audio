@@ -119,6 +119,7 @@ async fn listen(
     ports: Ports,
     mut stop: oneshot::Receiver<()>,
 ) -> transport::Result<()> {
+    crate::platform::raise_thread_priority().await;
     let trust = Arc::new(RwLock::new(identity.trust.clone()));
     let config = transport::server(identity.certificate.clone(), identity.private_key.clone())?;
     let endpoint = transport::server_endpoint(config, identity.bind)?;
@@ -387,46 +388,62 @@ async fn pair(
     }
 }
 
+/// An audio-thread operation that no longer borrows `Ports`, so the media
+/// loop can keep running while it waits.
+pub type Pending<T> = std::pin::Pin<Box<dyn Future<Output = transport::Result<T>> + Send>>;
+
 /// Run one operation on the audio thread. A timed-out request keeps its
 /// permit until the audio loop consumes it, which bounds PipeWire's otherwise
 /// unbounded channel to one queued command.
-async fn command<T>(
-    ports: &mut Ports,
-    operation: impl FnOnce(oneshot::Sender<T>) -> CaptureOperation,
+fn command<T: Send + 'static>(
+    ports: &Ports,
+    operation: impl FnOnce(oneshot::Sender<T>) -> CaptureOperation + Send + 'static,
     timeout: Duration,
-) -> transport::Result<T> {
-    let (tx, rx) = oneshot::channel();
-    let permit = tokio::time::timeout(
+) -> Pending<T> {
+    let commands = ports.commands.clone();
+    let slots = ports.command_slots.clone();
+    Box::pin(async move {
+        let (tx, rx) = oneshot::channel();
+        let permit = tokio::time::timeout(Duration::from_secs(2), slots.acquire_owned()).await??;
+        commands
+            .send((operation(tx), permit))
+            .map_err(|_| "audio loop closed")?;
+        Ok(tokio::time::timeout(timeout, rx).await??)
+    })
+}
+
+pub fn set_capture_active(ports: &Ports, active: bool) -> Pending<()> {
+    let applied = command(
+        ports,
+        move |tx| CaptureOperation::Active(active, tx),
         Duration::from_secs(2),
-        ports.command_slots.clone().acquire_owned(),
-    )
-    .await??;
-    ports
-        .commands
-        .send((operation(tx), permit))
-        .map_err(|_| "audio loop closed")?;
-    Ok(tokio::time::timeout(timeout, rx).await??)
+    );
+    Box::pin(async move {
+        if !applied.await? {
+            return Err("capture activation failed".into());
+        }
+        Ok(())
+    })
 }
 
 pub async fn capture_active(ports: &mut Ports, active: bool) -> transport::Result<()> {
     if ports.capture.is_none() {
         return Err("capture route unavailable".into());
     }
-    let applied = command(
-        ports,
-        |tx| CaptureOperation::Active(active, tx),
-        Duration::from_secs(2),
-    )
-    .await?;
-    if !applied {
-        return Err("capture activation failed".into());
-    }
-    Ok(())
+    set_capture_active(ports, active).await
+}
+
+pub fn inventory(ports: &Ports) -> Pending<Vec<Endpoint>> {
+    command(ports, CaptureOperation::Inventory, Duration::from_secs(3))
 }
 
 pub async fn desktop_routes(ports: &mut Ports) -> transport::Result<DesktopRoutes> {
-    let endpoints = command(ports, CaptureOperation::Inventory, Duration::from_secs(3)).await?;
-    Ok(DesktopRoutes {
+    let endpoints = inventory(ports).await?;
+    Ok(routes(ports, endpoints))
+}
+
+pub fn routes(ports: &Ports, endpoints: Vec<Endpoint>) -> DesktopRoutes {
+    DesktopRoutes {
         voice_runtime: None,
         platform: crate::audio::PLATFORM.into(),
         name: computer_name(),
@@ -436,48 +453,23 @@ pub async fn desktop_routes(ports: &mut Ports) -> transport::Result<DesktopRoute
         revision: ports.revision,
         voice: ports.voice,
         suppression_algorithms: available_suppression(),
-    })
+    }
 }
 
-pub async fn reopen_capture(ports: &mut Ports, route: Route) -> transport::Result<bool> {
-    let next = command(
+/// `None` when the audio thread could not open `route`.
+pub fn open_capture(ports: &Ports, route: Route) -> Pending<Option<CaptureRoute>> {
+    command(
         ports,
-        |tx| CaptureOperation::Route(route.clone(), tx),
+        move |tx| CaptureOperation::Route(route, tx),
         Duration::from_secs(3),
     )
-    .await?;
-    let Some(next) = next else {
-        return Ok(false);
-    };
+}
+
+pub fn install_capture(ports: &mut Ports, route: Route, next: CaptureRoute) {
     ports.capture = Some(next.samples);
     ports.capture_fault = next.fault;
     ports.resolved = next.resolved;
     ports.route = Some(route);
-    Ok(true)
-}
-
-pub async fn apply_route(ports: &mut Ports, route: Route) -> transport::Result<bool> {
-    if !reopen_capture(ports, route).await? {
-        return Ok(false);
-    }
-    ports.revision = ports
-        .revision
-        .checked_add(1)
-        .ok_or("settings revision exhausted")?;
-    let settings = crate::settings::Settings {
-        route: ports.route.clone(),
-        revision: ports.revision,
-        voice: ports.voice,
-    };
-    if let Err(error) = tokio::task::spawn_blocking(move || {
-        crate::settings::save(&settings).map_err(|error| error.to_string())
-    })
-    .await?
-    {
-        eprintln!("litzd: route applied but settings persistence failed: {error}");
-        return Ok(false);
-    }
-    Ok(true)
 }
 
 #[cfg(test)]

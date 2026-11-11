@@ -13,6 +13,50 @@ pub fn directory() -> io::Result<PathBuf> {
     base.map(|p| p.join("litz"))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "User state directory unavailable"))
 }
+/// Raises the calling thread above ordinary desktop work. It refills audio
+/// rings every few milliseconds, and a refusal only keeps the default priority.
+#[cfg(target_os = "linux")]
+pub async fn raise_thread_priority() {
+    const NICE: i32 = -11;
+    // SAFETY: gettid has no preconditions.
+    let thread = unsafe { libc::gettid() };
+    // SAFETY: adjusts only the calling thread; failure keeps the default.
+    if unsafe { libc::setpriority(libc::PRIO_PROCESS as _, thread as _, NICE) } == 0 {
+        return;
+    }
+    // An unprivileged process may not lower its own nice value; RealtimeKit
+    // grants it, as it does for PipeWire.
+    let granted = async {
+        zbus::Connection::system()
+            .await?
+            .call_method(
+                Some("org.freedesktop.RealtimeKit1"),
+                "/org/freedesktop/RealtimeKit1",
+                Some("org.freedesktop.RealtimeKit1"),
+                "MakeThreadHighPriority",
+                &(thread as u64, NICE),
+            )
+            .await
+    };
+    if let Err(error) = granted.await {
+        eprintln!("litzd: engine thread keeps the default priority: {error}");
+    }
+}
+#[cfg(windows)]
+pub async fn raise_thread_priority() {
+    use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
+    let mut task = 0;
+    // SAFETY: a static NUL-terminated task name and a valid out pointer. The
+    // registration lasts until the thread exits.
+    let handle =
+        unsafe { AvSetMmThreadCharacteristicsW(windows_sys::core::w!("Pro Audio"), &mut task) };
+    if handle.is_null() {
+        eprintln!(
+            "litzd: engine thread keeps the default priority: {}",
+            io::Error::last_os_error()
+        );
+    }
+}
 /// Bound allocations even if a file grows between metadata validation and read.
 pub fn read_limited(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
     use io::Read;
