@@ -183,7 +183,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     let mic_available = Arc::new(AtomicBool::new(render.is_some()));
     let mut fault = Arc::new(AtomicBool::new(false));
     let (mic, mut consumer) = pcm::channel();
-    let (mut captured, samples) = rtrb::RingBuffer::new(capture::CAPACITY);
+    let (mut captured, samples) = rtrb::RingBuffer::new(crate::audio::CAPACITY);
     let (mut demand, requests) = rtrb::RingBuffer::new(8);
     let (commands, operations) = mpsc::sync_channel(1);
     let effective = Some(route.clone());
@@ -224,7 +224,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
                 }
                 Ready::Route(opened, reply, _permit) => {
                     let result = opened.map(|Opened(next)| {
-                        let (producer, samples) = rtrb::RingBuffer::new(capture::CAPACITY);
+                        let (producer, samples) = rtrb::RingBuffer::new(crate::audio::CAPACITY);
                         captured = producer;
                         fault = Arc::new(AtomicBool::new(false));
                         let resolved = Some(next.id.clone());

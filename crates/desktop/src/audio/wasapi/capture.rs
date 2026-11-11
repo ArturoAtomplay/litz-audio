@@ -13,13 +13,9 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, IAudioCaptureClient,
 };
 
+use crate::audio::{CAPACITY, Captured};
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-pub const CAPACITY: usize = 2048;
-#[derive(Clone, Copy)]
-pub struct Captured {
-    pub samples: [f32; 2],
-    pub at: Instant,
-}
 
 /// Matches the adapter VB-CABLE's driver installs, not an endpoint name people
 /// can rename in Sound settings. Its "CABLE Input" and "CABLE In 16 Ch" pins
@@ -164,11 +160,9 @@ impl Capture {
                     f32::from_le_bytes(bytes[..4].try_into().unwrap()),
                     f32::from_le_bytes(bytes[4..].try_into().unwrap()),
                 ];
-                if samples.iter().any(|x| !x.is_finite())
-                    || output.push(Captured { samples, at }).is_err()
-                {
+                if output.push(Captured::new(samples, at)).is_err() {
                     fault.store(true, Ordering::Release);
-                    return Err("WASAPI capture overflow or invalid PCM".into());
+                    return Err("WASAPI capture overflow".into());
                 }
             }
         }

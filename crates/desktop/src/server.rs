@@ -44,7 +44,7 @@ pub enum CaptureOperation {
     Route(Route, oneshot::Sender<Option<CaptureRoute>>),
 }
 pub struct CaptureRoute {
-    pub samples: rtrb::Consumer<crate::audio::capture::Captured>,
+    pub samples: rtrb::Consumer<crate::audio::Captured>,
     pub fault: Arc<AtomicBool>,
     pub resolved: Option<String>,
 }
@@ -52,7 +52,7 @@ pub type CaptureCommand = (CaptureOperation, tokio::sync::OwnedSemaphorePermit);
 pub struct Ports {
     pub mic: PcmProducer,
     pub mic_available: Arc<AtomicBool>,
-    pub capture: Option<rtrb::Consumer<crate::audio::capture::Captured>>,
+    pub capture: Option<rtrb::Consumer<crate::audio::Captured>>,
     pub capture_fault: Arc<AtomicBool>,
     pub demand: rtrb::Consumer<Demand>,
     pub wake: Wake,

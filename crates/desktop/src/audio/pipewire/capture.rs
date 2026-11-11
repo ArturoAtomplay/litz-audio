@@ -14,13 +14,9 @@ use std::{
 
 use litz_core::protocol::Route;
 
+use crate::audio::{CAPACITY, Captured};
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-pub const CAPACITY: usize = 2048;
-#[derive(Clone, Copy)]
-pub struct Captured {
-    pub samples: [f32; 2],
-    pub at: std::time::Instant,
-}
 
 pub struct Capture {
     // Listeners must be dropped before the proxies they were registered on.
@@ -287,16 +283,7 @@ pub fn open(
             for frame in bytes[start..end].as_chunks::<8>().0 {
                 let left = f32::from_ne_bytes(frame[..4].try_into().unwrap());
                 let right = f32::from_ne_bytes(frame[4..].try_into().unwrap());
-                if producer
-                    .push(Captured {
-                        samples: [
-                            if left.is_finite() { left } else { 0.0 },
-                            if right.is_finite() { right } else { 0.0 },
-                        ],
-                        at,
-                    })
-                    .is_err()
-                {
+                if producer.push(Captured::new([left, right], at)).is_err() {
                     process_fault.store(true, Ordering::Release);
                     break;
                 }
