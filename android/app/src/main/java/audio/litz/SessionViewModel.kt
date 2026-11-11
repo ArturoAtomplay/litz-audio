@@ -53,6 +53,7 @@ internal data class UiState(
     val selected: String? = null,
     val pairing: String? = null,
     val pairingCode: String? = null,
+    val pairingConfirm: Boolean = false,
     val discovering: Boolean = false,
     val quiet: Boolean = false,
 ) {
@@ -400,6 +401,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                                 mutable.update { it.copy(pairingCode = state.code) }
                                 delay(200)
                             }
+                            is PairingState.Confirming -> {
+                                mutable.update {
+                                    it.copy(pairingCode = state.code, pairingConfirm = true)
+                                }
+                                delay(200)
+                            }
                             is PairingState.Accepted -> {
                                 withContext(Dispatchers.IO) {
                                     store.remember(computer.name, state.certificate, state.endpoint)
@@ -442,10 +449,16 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                             pairing = null
                         }
                     }
-                    mutable.update { it.copy(pairing = null, pairingCode = null) }
+                    mutable.update {
+                        it.copy(pairing = null, pairingCode = null, pairingConfirm = false)
+                    }
                     pairJob = null
                 }
             }
+    }
+
+    internal fun confirmPair() {
+        synchronized(pairLifetime) { pairing?.confirm() }
     }
 
     internal fun cancelPair() {

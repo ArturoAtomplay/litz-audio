@@ -8,6 +8,7 @@
     <string name="action_close">Cerrar</string>
     <string name="action_refresh">Actualizar</string>
     <string name="action_pair">Vincular</string>
+    <string name="action_codes_match">Los códigos coinciden</string>
     <string name="action_pair_again">Vincular de nuevo</string>
     <string name="action_try_again">Reintentar</string>
     <string name="action_forget">Olvidar</string>
@@ -47,6 +48,7 @@
     <string name="pairing_waiting">Esperando a tu computadora…</string>
     <string name="pairing_allow_if_shows">Permite la conexión en tu computadora si muestra:</string>
     <string name="pairing_codes_differ">Si los códigos no coinciden, cancela.</string>
+    <string name="pairing_confirm_if_showed">Continúa solo si tu computadora mostró este mismo código:</string>
     <string name="pair_with_title">¿Vincular con %1$s?</string>
     <string name="pair_with_body">Toca Vincular y luego permite la conexión en %1$s. Solo lo haces una vez.</string>
     <string name="pair_by_ip">Vincular por dirección IP</string>

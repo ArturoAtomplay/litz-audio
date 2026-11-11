@@ -20,6 +20,11 @@ pub enum PairingState {
     Reviewing {
         code: String,
     },
+    /// The computer accepted. Nothing is pinned until the person confirms that
+    /// their computer showed `code`.
+    Confirming {
+        code: String,
+    },
     Accepted {
         certificate: Vec<u8>,
         endpoint: SocketAddr,
@@ -35,6 +40,7 @@ pub enum PairingState {
 pub struct Pairing {
     state: Arc<Mutex<PairingState>>,
     cancel: Arc<Notify>,
+    confirm: Arc<Notify>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -64,8 +70,10 @@ impl Pairing {
         }
         let state = Arc::new(Mutex::new(PairingState::Connecting));
         let cancel = Arc::new(Notify::new());
+        let confirm = Arc::new(Notify::new());
         let worker_state = state.clone();
         let worker_cancel = cancel.clone();
+        let worker_confirm = confirm.clone();
         let worker = std::thread::Builder::new()
             .name("litz-pairing".into())
             .spawn(move || {
@@ -81,6 +89,7 @@ impl Pairing {
                             name,
                             worker_state.clone(),
                             worker_cancel,
+                            worker_confirm,
                         ))
                     });
                 *worker_state.lock().unwrap() = result.unwrap_or_else(|e| PairingState::Failed {
@@ -91,12 +100,20 @@ impl Pairing {
         Ok(Arc::new(Self {
             state,
             cancel,
+            confirm,
             worker: Some(worker),
         }))
     }
 
     pub fn state(&self) -> PairingState {
         self.state.lock().unwrap().clone()
+    }
+
+    /// The person saw the same code on their computer.
+    pub fn confirm(&self) {
+        if matches!(*self.state.lock().unwrap(), PairingState::Confirming { .. }) {
+            self.confirm.notify_one();
+        }
     }
 
     pub fn cancel(&self) {
@@ -120,6 +137,7 @@ async fn pair(
     name: String,
     state: Arc<Mutex<PairingState>>,
     cancel: Arc<Notify>,
+    confirm: Arc<Notify>,
 ) -> Result<PairingState> {
     let bind = if address.is_ipv4() {
         "0.0.0.0:0"
@@ -133,7 +151,7 @@ async fn pair(
     )?);
     let result = tokio::select! {
         _ = cancel.notified() => Ok(PairingState::Cancelled),
-        result = exchange(&endpoint, &identity.certificate, address, &expected, name, &state) => result,
+        result = exchange(&endpoint, &identity.certificate, address, &expected, name, &state, &confirm) => result,
     };
     // The runtime ends with this call; without waiting, CLOSE is never sent and
     // the computer keeps prompting for a phone that already gave up.
@@ -149,6 +167,7 @@ async fn exchange(
     expected: &str,
     name: String,
     state: &Mutex<PairingState>,
+    confirm: &Notify,
 ) -> Result<PairingState> {
     let connection = tokio::time::timeout(
         Duration::from_secs(5),
@@ -184,7 +203,7 @@ async fn exchange(
         .write(&Record::new(1, Message::PairReveal { nonce }))
         .await?;
     let code = verification_code(phone, &desktop, &nonce, &desktop_nonce);
-    *state.lock().unwrap() = PairingState::Reviewing { code };
+    *state.lock().unwrap() = PairingState::Reviewing { code: code.clone() };
     let approval = litz_core::protocol::APPROVAL_WINDOW + Duration::from_secs(10);
     let reply = tokio::time::timeout(approval, control.read()).await??;
     let outcome = match reply {
@@ -200,11 +219,15 @@ async fn exchange(
         _ => return Err(Failure::PairingUnavailable.into()),
     };
     match outcome {
-        PairOutcome::Accepted => Ok(PairingState::Accepted {
-            certificate: desktop,
-            endpoint: address,
-            fingerprint: actual,
-        }),
+        PairOutcome::Accepted => {
+            *state.lock().unwrap() = PairingState::Confirming { code };
+            confirm.notified().await;
+            Ok(PairingState::Accepted {
+                certificate: desktop,
+                endpoint: address,
+                fingerprint: actual,
+            })
+        }
         PairOutcome::Declined => Err(Failure::PairingDeclined.into()),
         PairOutcome::Full => Err(Failure::PairingFull.into()),
         PairOutcome::Unavailable => Err(Failure::PromptUnavailable.into()),
@@ -218,7 +241,8 @@ mod tests {
     use litz_core::session::Trust;
     use std::sync::RwLock;
 
-    async fn manual_attempt(expected: String, outcome: PairOutcome) -> Result<PairingState> {
+    /// A computer that answers `outcome` without asking anyone.
+    fn computer(outcome: PairOutcome) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
         let generated = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
         let desktop = generated.cert.der().to_vec();
         let server = transport::server_endpoint(
@@ -265,6 +289,14 @@ mod tests {
             let _ = tokio::time::timeout(Duration::from_secs(2), control.send.stopped()).await;
             Ok(())
         });
+        Ok((address, listener))
+    }
+
+    /// The person confirms as soon as the computer accepts.
+    async fn manual_attempt(expected: String, outcome: PairOutcome) -> Result<PairingState> {
+        let (address, listener) = computer(outcome)?;
+        let confirm = Arc::new(Notify::new());
+        confirm.notify_one();
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             pair(
@@ -274,11 +306,43 @@ mod tests {
                 "Test phone".into(),
                 Arc::new(Mutex::new(PairingState::Connecting)),
                 Arc::new(Notify::new()),
+                confirm,
             ),
         )
         .await?;
         listener.abort();
         result
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_computer_that_accepts_by_itself_is_not_pinned() -> Result<()> {
+        let (address, listener) = computer(PairOutcome::Accepted)?;
+        let pairing = Pairing::new(
+            crate::create_identity()?,
+            address,
+            String::new(),
+            "Test phone".into(),
+        )?;
+        pairing.confirm();
+        let reached = async {
+            while !matches!(pairing.state(), PairingState::Confirming { .. }) {
+                assert!(!matches!(pairing.state(), PairingState::Accepted { .. }));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), reached).await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(matches!(pairing.state(), PairingState::Confirming { .. }));
+        pairing.confirm();
+        let pinned = async {
+            while !matches!(pairing.state(), PairingState::Accepted { .. }) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), pinned).await?;
+        listener.abort();
+        drop(pairing);
+        Ok(())
     }
 
     #[tokio::test(flavor = "current_thread")]

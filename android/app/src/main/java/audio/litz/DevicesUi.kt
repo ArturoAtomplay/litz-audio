@@ -87,6 +87,7 @@ internal fun DevicesApp(
     stop: () -> Unit,
     connect: () -> Unit,
     pair: (NearbyComputer) -> Unit,
+    confirmPair: () -> Unit,
     cancelPair: () -> Unit,
     select: (SavedComputer) -> Unit,
     refresh: () -> Unit,
@@ -169,7 +170,7 @@ internal fun DevicesApp(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            AddComputer(ui, busy, pair, cancelPair, refresh)
+                            AddComputer(ui, busy, pair, confirmPair, cancelPair, refresh)
                         } else {
                             ComputerCard(
                                 selected,
@@ -223,7 +224,7 @@ internal fun DevicesApp(
                                 }
                             }
                         }
-                        AddComputer(ui, busy, pair, cancelPair, refresh)
+                        AddComputer(ui, busy, pair, confirmPair, cancelPair, refresh)
                     }
                     Screen.Settings -> SettingsScreen(ui, status, busy, edit, apply, voice)
                 }
@@ -386,6 +387,7 @@ private fun AddComputer(
     ui: UiState,
     busy: Boolean,
     pair: (NearbyComputer) -> Unit,
+    confirmPair: () -> Unit,
     cancelPair: () -> Unit,
     refresh: () -> Unit,
 ) {
@@ -402,6 +404,13 @@ private fun AddComputer(
                 val code = ui.pairingCode
                 if (code == null) {
                     Text(stringResource(R.string.pairing_waiting))
+                } else if (ui.pairingConfirm) {
+                    Text(stringResource(R.string.pairing_confirm_if_showed))
+                    Text(code, style = MaterialTheme.typography.displaySmall)
+                    Text(stringResource(R.string.pairing_codes_differ))
+                    Button(onClick = confirmPair) {
+                        Text(stringResource(R.string.action_codes_match))
+                    }
                 } else {
                     Text(stringResource(R.string.pairing_allow_if_shows))
                     Text(code, style = MaterialTheme.typography.displaySmall)

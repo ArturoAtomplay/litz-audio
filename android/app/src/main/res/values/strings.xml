@@ -11,6 +11,7 @@
     <string name="action_close">Close</string>
     <string name="action_refresh">Refresh</string>
     <string name="action_pair">Pair</string>
+    <string name="action_codes_match">The codes match</string>
     <string name="action_pair_again">Pair again</string>
     <string name="action_try_again">Try again</string>
     <string name="action_forget">Forget</string>
@@ -50,6 +51,7 @@
     <string name="pairing_waiting">Waiting for your computer…</string>
     <string name="pairing_allow_if_shows">Allow the connection on your computer if it shows:</string>
     <string name="pairing_codes_differ">If the codes differ, cancel.</string>
+    <string name="pairing_confirm_if_showed">Continue only if your computer showed this same code:</string>
     <string name="pair_with_title">Pair with %1$s?</string>
     <string name="pair_with_body">Tap Pair, then allow the connection on %1$s. You only do this once.</string>
     <string name="pair_by_ip">Pair by IP address</string>
