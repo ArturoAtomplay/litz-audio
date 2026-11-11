@@ -58,13 +58,30 @@ impl Default for Settings {
         }
     }
 }
+/// Whether `source` is a recording mode the engine accepts; 0 lets it choose.
+#[uniffi::export]
+pub fn is_capture_source(source: i32) -> bool {
+    [0, 1, 5, 6, 7, 9, 10].contains(&source)
+}
+
+/// Whether applying `next` opens, closes or restarts a stream.
+#[uniffi::export]
+pub fn changes_audio_path(current: Settings, next: Settings) -> bool {
+    current.mic != next.mic
+        || current.playback != next.playback
+        || current.muted != next.muted
+        || current.source != next.source
+        || current.input != next.input
+        || current.output != next.output
+}
+
 impl Settings {
     fn validate(&self) -> Result<()> {
         if !self.mic_gain.is_finite()
             || !self.playback_gain.is_finite()
             || !(0.0..=2.0).contains(&self.mic_gain)
             || !(0.0..=2.0).contains(&self.playback_gain)
-            || ![0, 1, 5, 6, 7, 9, 10].contains(&self.source)
+            || !is_capture_source(self.source)
             || self.headset_ids.len() > 64
             || self.input < 0
             || self.output < 0
@@ -1270,8 +1287,7 @@ impl Supervisor {
     }
 
     fn address(&mut self, endpoint: std::net::SocketAddr) {
-        if endpoint.ip().is_unspecified() || endpoint.ip().is_multicast() || endpoint.port() < 1024
-        {
+        if !crate::pairing::reachable(&endpoint) {
             return;
         }
         self.identity.endpoint = endpoint;
@@ -1662,6 +1678,58 @@ mod tests {
             }),
             9
         );
+    }
+
+    #[test]
+    fn every_stream_the_engine_restarts_counts_as_an_audio_path_change() {
+        let base = Settings {
+            mic: true,
+            playback: true,
+            ..Settings::default()
+        };
+        let changes = [
+            Settings {
+                mic: false,
+                ..base.clone()
+            },
+            Settings {
+                playback: false,
+                ..base.clone()
+            },
+            Settings {
+                muted: true,
+                ..base.clone()
+            },
+            Settings {
+                source: 7,
+                ..base.clone()
+            },
+            Settings {
+                input: 3,
+                ..base.clone()
+            },
+            Settings {
+                output: 4,
+                ..base.clone()
+            },
+        ];
+        for next in changes {
+            assert!(changes_audio_path(base.clone(), next.clone()));
+            assert!(changes_audio_path(next, base.clone()));
+        }
+        let louder = Settings {
+            mic_gain: 2.0,
+            playback_gain: 0.5,
+            reconnect: false,
+            ..base.clone()
+        };
+        assert!(!changes_audio_path(base.clone(), louder.clone()));
+        assert!(can_reuse_audio(&base, &louder, true, true));
+        assert_eq!(
+            stream_restarts(&base, &louder, [false, false]),
+            [false, false]
+        );
+        assert!(is_capture_source(0) && is_capture_source(10) && !is_capture_source(2));
     }
 
     #[test]

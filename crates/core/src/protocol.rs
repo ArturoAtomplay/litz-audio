@@ -12,6 +12,12 @@ pub const MAX_CONTROL: usize = 65536;
 pub const FRAME: usize = 480;
 pub const APPROVAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// The mDNS host name a computer answers to. `id` is its certificate
+/// fingerprint in hex; `None` when it is too short to be one.
+pub fn mdns_host(id: &str) -> Option<String> {
+    Some(format!("litz-{}.local", id.get(..16)?))
+}
+
 /// Why a connection was closed. The phone decides from these whether to
 /// reconnect, stop, or pair again, so they are part of the wire protocol.
 pub mod close {
@@ -399,6 +405,14 @@ mod bounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mdns_host_is_the_start_of_the_fingerprint() {
+        assert_eq!(
+            mdns_host(&"0123456789abcdef".repeat(4)).as_deref(),
+            Some("litz-0123456789abcdef.local")
+        );
+        assert_eq!(mdns_host("abc"), None);
+    }
     #[test]
     fn close_codes_keep_their_wire_values() {
         let codes = [

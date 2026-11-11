@@ -16,6 +16,8 @@ import audio.litz.native.SessionState
 import audio.litz.native.Settings
 import audio.litz.native.Status
 import audio.litz.native.VoiceSettings
+import audio.litz.native.changesAudioPath
+import audio.litz.native.defaultPort
 import java.util.concurrent.Executors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +33,12 @@ internal data class SessionStatus(
     val error: UiText? = null,
     val directionErrors: List<UiText?> = listOf(null, null),
     val audioPending: Boolean = false,
+)
+
+internal data class UsbLink(
+    val subnets: List<UsbSubnet> = emptyList(),
+    /** The selected computer's fingerprint and its address on the tether. */
+    val endpoint: Pair<String, String>? = null,
 )
 
 class SessionService : Service() {
@@ -52,7 +60,10 @@ class SessionService : Service() {
     private var localError: UiText? = null
     private var active = false
     private var controlConnected = false
-    private var usbEndpoint: String? = null
+    private val usbLink = MutableStateFlow(UsbLink())
+    internal val usb = usbLink.asStateFlow()
+    /** Whether the screen wants the tether watched while nothing is streaming. */
+    internal var watchUsbWhenIdle: () -> Boolean = { false }
     private var wifiFallback: String? = null
     private var lastUsbAttempt = 0L
     private lateinit var wake: PowerManager.WakeLock
@@ -158,9 +169,14 @@ class SessionService : Service() {
             }
         }
         scope.launch {
+            var idleTurn = false
             while (isActive) {
                 delay(1500)
-                if (!desired.mic && !desired.playback) continue
+                if (!desired.mic && !desired.playback) {
+                    // Half as often while nothing is streaming.
+                    idleTurn = !idleTurn
+                    if (!idleTurn || !watchUsbWhenIdle()) continue
+                }
                 val route =
                     try {
                         withContext(Dispatchers.IO) {
@@ -174,7 +190,8 @@ class SessionService : Service() {
                                 saved?.let {
                                     UsbMdns.resolve(
                                         it.fingerprint,
-                                        it.endpoint.substringAfterLast(':').toIntOrNull() ?: 47165,
+                                        it.endpoint.substringAfterLast(':').toIntOrNull()
+                                            ?: defaultPort().toInt(),
                                         interfaces,
                                     )
                                 },
@@ -186,36 +203,46 @@ class SessionService : Service() {
                         continue
                     }
                 val (interfaces, saved, found) = route
-                if (!desired.mic && !desired.playback) continue
-                if (saved == null) continue
-                if (found != null) {
-                    if (found != usbEndpoint) {
-                        if (interfaces.none { it.subnet.contains(saved.endpoint) })
+                val streaming = desired.mic || desired.playback
+                if (!streaming && !watchUsbWhenIdle()) continue
+                var endpoint = usbLink.value.endpoint
+                if (saved != null && found != null) {
+                    if (endpoint != (saved.fingerprint to found)) {
+                        if (streaming && interfaces.none { it.subnet.contains(saved.endpoint) })
                             wifiFallback = saved.endpoint
-                        usbEndpoint = found
+                        endpoint = saved.fingerprint to found
                         lastUsbAttempt = 0L
+                        if (!streaming) {
+                            withContext(Dispatchers.IO) {
+                                IdentityStore(this@SessionService)
+                                    .updateAddress(saved.fingerprint, found)
+                            }
+                            address(found)
+                        }
                     }
-                    if (mutable.value.status?.connectedEndpoint != found) {
+                    if (streaming && mutable.value.status?.connectedEndpoint != found) {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastUsbAttempt >= 5000L) {
                             lastUsbAttempt = now
                             address(found)
                         }
-                    } else if (saved.endpoint != found)
+                    } else if (streaming && saved.endpoint != found)
                         withContext(Dispatchers.IO) {
                             IdentityStore(this@SessionService)
                                 .updateAddress(saved.fingerprint, found)
                         }
-                } else if (interfaces.isEmpty() && usbEndpoint != null) {
-                    usbEndpoint = null
-                    wifiFallback?.let { fallback ->
-                        withContext(Dispatchers.IO) {
-                            IdentityStore(this@SessionService)
-                                .updateAddress(saved.fingerprint, fallback)
+                } else if (interfaces.isEmpty() && endpoint != null) {
+                    endpoint = null
+                    if (streaming && saved != null)
+                        wifiFallback?.let { fallback ->
+                            withContext(Dispatchers.IO) {
+                                IdentityStore(this@SessionService)
+                                    .updateAddress(saved.fingerprint, fallback)
+                            }
+                            address(fallback)
                         }
-                        address(fallback)
-                    }
                 }
+                usbLink.value = UsbLink(interfaces.map { it.subnet }, endpoint)
             }
         }
     }
@@ -265,7 +292,7 @@ class SessionService : Service() {
     internal fun update(settings: Settings, reason: UiText? = null) {
         scope.launch {
             mutex.withLock {
-                val changingAudioPath = desired.changesAudioPath(settings)
+                val changingAudioPath = changesAudioPath(desired, settings)
                 desired = settings
                 localError = reason
                 mutable.value =

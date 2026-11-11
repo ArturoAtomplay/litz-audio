@@ -89,7 +89,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         ) { nearby ->
             val update = ++discoveryUpdate
             viewModelScope.launch {
-                val selectedUsb = usbEndpoint?.takeIf { it.first == mutable.value.selected }?.second
+                val selectedUsb =
+                    usb.endpoint?.takeIf { it.first == mutable.value.selected }?.second
                 val candidates =
                     nearby
                         .filter { it.compatible }
@@ -114,7 +115,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     ?.endpoints
                     ?.firstOrNull { endpoint ->
                         endpoint.firstOrNull()?.isDigit() == true &&
-                            usbSubnets.none { it.contains(endpoint) }
+                            usb.subnets.none { it.contains(endpoint) }
                     }
                     ?.let { service?.rememberWifiAddress(it) }
                 val store = IdentityStore(context)
@@ -124,7 +125,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         if (
                             !(it.fingerprint == mutable.value.selected &&
                                 (mutable.value.settings.mic || mutable.value.settings.playback) &&
-                                usbSubnets.isNotEmpty()) &&
+                                usb.subnets.isNotEmpty()) &&
                                 store.updateAddress(it.fingerprint, it.endpoint) &&
                                 it.fingerprint == mutable.value.selected
                         )
@@ -146,8 +147,9 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     private var lastAttempt = SystemClock.elapsedRealtime()
     private var visible = false
     private var addressAttempt = 0
-    private var usbSubnets: List<UsbSubnet> = emptyList()
-    private var usbEndpoint: Pair<String, String>? = null
+    private var usbWatch: Job? = null
+    private val usb
+        get() = service?.usb?.value ?: UsbLink()
 
     internal fun visible(value: Boolean) {
         visible = value
@@ -164,7 +166,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun seen(ui: UiState) =
-        ui.nearby.any { it.fingerprint == ui.selected } || usbEndpoint?.first == ui.selected
+        ui.nearby.any { it.fingerprint == ui.selected } || usb.endpoint?.first == ui.selected
 
     private fun reconnectIfIdle(): Boolean {
         val ui = mutable.value
@@ -211,8 +213,26 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     private val connection =
         object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                service = (binder as SessionService.LocalBinder).service
+                val bound = (binder as SessionService.LocalBinder).service
+                service = bound
                 reconnectIfIdle()
+                bound.watchUsbWhenIdle = { mutable.value.discovering }
+                usbWatch =
+                    viewModelScope.launch {
+                        var previous = UsbLink()
+                        bound.usb.collect { link ->
+                            val moved = link.endpoint != null && link.endpoint != previous.endpoint
+                            val rerouted = link.subnets != previous.subnets
+                            previous = link
+                            val ui = mutable.value
+                            if (moved && !ui.settings.mic && !ui.settings.playback) {
+                                val saved =
+                                    withContext(Dispatchers.IO) { IdentityStore(context).saved() }
+                                mutable.update { it.copy(saved = saved) }
+                            }
+                            if (rerouted && ui.discovering) discovery.refresh()
+                        }
+                    }
                 collection =
                     viewModelScope.launch {
                         service!!.status.collect { status ->
@@ -241,6 +261,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             override fun onServiceDisconnected(name: ComponentName?) {
                 service = null
                 collection?.cancel()
+                usbWatch?.cancel()
                 mutable.update {
                     it.copy(
                         settings = it.settings.copy(mic = false, playback = false),
@@ -265,56 +286,6 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 if (now - lastAttempt >= retryDelay(seen(ui), failures) && reconnectIfIdle()) {
                     lastAttempt = now
                     failures++
-                }
-            }
-        }
-        viewModelScope.launch {
-            while (isActive) {
-                delay(3000)
-                if (!mutable.value.discovering) continue
-                val interfaces = withContext(Dispatchers.IO) { UsbRoutes.interfaces() }
-                val current = interfaces.map { it.subnet }
-                val selected =
-                    mutable.value.saved.firstOrNull { it.fingerprint == mutable.value.selected }
-                val found =
-                    if (selected != null && interfaces.isNotEmpty())
-                        withContext(Dispatchers.IO) {
-                            UsbMdns.resolve(
-                                selected.fingerprint,
-                                selected.endpoint.substringAfterLast(':').toIntOrNull() ?: 47165,
-                                interfaces,
-                            )
-                        }
-                    else null
-                if (
-                    selected != null &&
-                        found != null &&
-                        usbEndpoint != (selected.fingerprint to found)
-                ) {
-                    usbEndpoint = selected.fingerprint to found
-                    if (!mutable.value.settings.mic && !mutable.value.settings.playback) {
-                        val store = IdentityStore(context)
-                        withContext(Dispatchers.IO) {
-                            store.updateAddress(selected.fingerprint, found)
-                        }
-                        mutable.update { state ->
-                            state.copy(
-                                saved =
-                                    state.saved.map {
-                                        if (it.fingerprint == selected.fingerprint)
-                                            it.copy(endpoint = found)
-                                        else it
-                                    }
-                            )
-                        }
-                        service?.address(found)
-                    }
-                } else if (interfaces.isEmpty()) {
-                    usbEndpoint = null
-                }
-                if (current != usbSubnets) {
-                    usbSubnets = current
-                    discovery.refresh()
                 }
             }
         }
@@ -595,6 +566,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         if (networkCallbackRegistered) connectivity.unregisterNetworkCallback(networkCallback)
         cancelPair()
         collection?.cancel()
+        usbWatch?.cancel()
+        service?.watchUsbWhenIdle = { false }
         context.unbindService(connection)
         service = null
     }

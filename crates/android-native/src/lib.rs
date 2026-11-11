@@ -24,6 +24,24 @@ uniffi::custom_type!(SocketAddr, String, {
     try_lift: |text| Ok(text.parse()?),
 });
 
+/// What the computer advertises as `v` over mDNS.
+#[uniffi::export]
+pub fn protocol_version() -> u8 {
+    litz_core::protocol::VERSION
+}
+
+/// The port a computer listens on unless it advertises another.
+#[uniffi::export]
+pub fn default_port() -> u16 {
+    litz_core::protocol::PORT
+}
+
+/// The mDNS host name of the computer with this certificate fingerprint.
+#[uniffi::export]
+pub fn mdns_host(fingerprint: String) -> Option<String> {
+    litz_core::protocol::mdns_host(&fingerprint)
+}
+
 type EqualizerGains = [i8; 3];
 
 uniffi::custom_type!(EqualizerGains, Vec<i8>, {

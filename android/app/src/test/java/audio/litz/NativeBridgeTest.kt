@@ -6,6 +6,10 @@ import audio.litz.native.Pairing
 import audio.litz.native.SessionState
 import audio.litz.native.Settings
 import audio.litz.native.createIdentity
+import audio.litz.native.defaultPort
+import audio.litz.native.isCaptureSource
+import audio.litz.native.manualEndpoint
+import audio.litz.native.mdnsHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -27,6 +31,16 @@ class NativeBridgeTest {
             assertFalse(stopped.desired.mic)
             assertEquals(SessionState.IDLE, stopped.state)
         }
+    }
+
+    @Test
+    fun theAppReadsItsProtocolRulesFromTheEngine() {
+        assertEquals("1", PROTOCOL_VERSION)
+        assertEquals(47165, defaultPort().toInt())
+        assertEquals("litz-aaaaaaaaaaaaaaaa.local", mdnsHost("a".repeat(64)))
+        assertEquals("192.168.1.10:47165", manualEndpoint("192.168.1.10"))
+        assertEquals(null, manualEndpoint("224.0.0.251"))
+        assertTrue(isCaptureSource(7) && !isCaptureSource(2))
     }
 
     @Test

@@ -1,5 +1,6 @@
 package audio.litz
 
+import audio.litz.native.mdnsHost
 import java.net.DatagramPacket
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -9,7 +10,7 @@ import java.net.MulticastSocket
 internal object UsbMdns {
     fun resolve(fingerprint: String, port: Int, interfaces: List<UsbRoutes.Interface>): String? {
         if (!fingerprint.matches(Regex("[0-9a-f]{64}")) || port !in 1024..65535) return null
-        val host = "litz-${fingerprint.take(16)}.local"
+        val host = mdnsHost(fingerprint) ?: return null
         val question = query(host)
         val group = InetAddress.getByName("224.0.0.251")
         for (usb in interfaces) {

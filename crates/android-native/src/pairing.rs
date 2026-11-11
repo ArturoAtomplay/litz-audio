@@ -36,6 +36,41 @@ pub enum PairingState {
     },
 }
 
+/// An address a computer could be listening on.
+pub fn reachable(address: &SocketAddr) -> bool {
+    !address.ip().is_unspecified() && !address.ip().is_multicast() && address.port() >= 1024
+}
+
+/// What a person may type to pair by address: an IPv4 address and,
+/// optionally, a port. `None` until it names a computer that could exist.
+#[uniffi::export]
+pub fn manual_endpoint(input: String) -> Option<SocketAddr> {
+    fn number<T: std::str::FromStr>(digits: &str, longest: usize) -> Option<T> {
+        if digits.is_empty()
+            || digits.len() > longest
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        digits.parse().ok()
+    }
+    let input = input.trim();
+    let (host, port) = match input.split_once(':') {
+        Some((host, port)) => (host, number(port, 10)?),
+        None => (input, litz_core::protocol::PORT),
+    };
+    let mut octets = [0u8; 4];
+    let mut parts = host.split('.');
+    for octet in &mut octets {
+        *octet = number(parts.next()?, 3)?;
+    }
+    if parts.next().is_some() || octets[0] == 0 || octets[0] >= 224 {
+        return None;
+    }
+    let address = SocketAddr::from((octets, port));
+    reachable(&address).then_some(address)
+}
+
 #[derive(uniffi::Object)]
 pub struct Pairing {
     state: Arc<Mutex<PairingState>>,
@@ -56,9 +91,7 @@ impl Pairing {
         let invalid = |detail: &str| Failure::Internal {
             detail: detail.into(),
         };
-        if address.ip().is_unspecified()
-            || address.ip().is_multicast()
-            || address.port() < 1024
+        if !reachable(&address)
             || (!expected.is_empty()
                 && (expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit())))
             || name.is_empty()
@@ -238,6 +271,38 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_typed_address_must_name_a_computer_that_could_exist() {
+        let endpoint = |text: &str| manual_endpoint(text.into()).map(|a| a.to_string());
+        assert_eq!(
+            endpoint("192.168.1.10").as_deref(),
+            Some("192.168.1.10:47165")
+        );
+        assert_eq!(
+            endpoint(" 192.168.001.10:5000 ").as_deref(),
+            Some("192.168.1.10:5000")
+        );
+        for refused in [
+            "",
+            "192.168.1",
+            "192.168.1.10.2",
+            "192.168.1.256",
+            "192.168.1.0010",
+            "0.1.2.3",
+            "224.0.0.251",
+            "255.255.255.255",
+            "192.168.1.10:",
+            "192.168.1.10:+5000",
+            "192.168.1.10:80",
+            "192.168.1.10:70000",
+            "192.168.1.10:5000:1",
+            "[::1]:5000",
+            "studio.local",
+        ] {
+            assert_eq!(endpoint(refused), None, "{refused}");
+        }
+    }
 
     /// A computer that answers `outcome` without asking anyone.
     fn computer(outcome: PairOutcome) -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {

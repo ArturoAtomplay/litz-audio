@@ -30,6 +30,7 @@ import audio.litz.native.SavedComputer
 import audio.litz.native.SessionState
 import audio.litz.native.Settings
 import audio.litz.native.VoiceSettings
+import audio.litz.native.manualEndpoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -49,28 +50,6 @@ internal data class MicrophoneSource(
     @StringRes val title: Int,
     @StringRes val description: Int,
 )
-
-internal fun manualEndpoint(input: String): String? {
-    val parts = input.trim().split(':')
-    if (parts.size !in 1..2) return null
-    val octets = parts[0].split('.')
-    if (
-        octets.size != 4 ||
-            octets.any {
-                it.isEmpty() ||
-                    it.length > 3 ||
-                    !it.all(Char::isDigit) ||
-                    it.toIntOrNull()?.let { value -> value in 0..255 } != true
-            }
-    )
-        return null
-    val first = octets[0].toInt()
-    if (first == 0 || first >= 224 || octets.all { it.toInt() == 0 }) return null
-    val port = if (parts.size == 2) parts[1].toIntOrNull() else 47165
-    if (port == null || port !in 1024..65535 || (parts.size == 2 && parts[1].any { !it.isDigit() }))
-        return null
-    return "${octets.joinToString(".") { it.toInt().toString() }}:$port"
-}
 
 private enum class Screen {
     Home,

@@ -7,12 +7,13 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.Immutable
+import audio.litz.native.protocolVersion
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.util.concurrent.Executor
 
-/** Must match `litz_core::protocol::VERSION`; the computer advertises it over mDNS. */
-internal const val PROTOCOL_VERSION = "1"
+/** The computer advertises its protocol version over mDNS. */
+internal val PROTOCOL_VERSION: String = protocolVersion().toString()
 
 @Immutable
 internal data class NearbyComputer(

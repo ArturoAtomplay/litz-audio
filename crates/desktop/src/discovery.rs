@@ -6,7 +6,10 @@ impl Publisher {
         if std::env::var_os("LITZ_DISABLE_DISCOVERY").is_some() {
             return Ok(Self(None));
         }
-        let host = format!("litz-{}.local.", &id[..16]);
+        let host = format!(
+            "{}.",
+            litz_core::protocol::mdns_host(id).ok_or("device id")?
+        );
         let info = ServiceInfo::new(
             "_litz._udp.local.",
             name,

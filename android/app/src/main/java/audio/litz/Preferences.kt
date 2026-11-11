@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import audio.litz.native.Settings
+import audio.litz.native.isCaptureSource
 import kotlinx.coroutines.flow.first
 
 private val Context.preferences by preferencesDataStore("preferences")
@@ -45,14 +46,6 @@ internal fun settingsFrom(bundle: Bundle): Settings =
         headsetIds = bundle.getIntArray("headset_ids")?.toList().orEmpty(),
     )
 
-internal fun Settings.changesAudioPath(next: Settings): Boolean =
-    mic != next.mic ||
-        playback != next.playback ||
-        muted != next.muted ||
-        source != next.source ||
-        input != next.input ||
-        output != next.output
-
 internal data class PreferenceDraft(
     val source: Int? = null,
     val micGain: Float? = null,
@@ -89,7 +82,7 @@ internal class Preferences(private val context: Context) {
             micGain = p[micGain] ?: 1f,
             playbackGain = p[playbackGain]?.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 1f,
             reconnect = p[reconnect] ?: true,
-            source = p[source]?.takeIf { it in listOf(0, 1, 5, 6, 7, 9, 10) } ?: 0,
+            source = p[source]?.takeIf(::isCaptureSource) ?: 0,
         )
     }
 
