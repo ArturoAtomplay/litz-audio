@@ -65,6 +65,19 @@ class NearbyDiscoveryTest {
     }
 
     @Test
+    fun a_computer_on_another_protocol_version_is_shown_as_needing_an_update() {
+        discovery.start()
+        val later = info().apply { setAttribute("v", "2") }
+        listener().onServiceFound(later)
+        drain()
+        resolver(later).onServiceResolved(later)
+        drain()
+        assertFalse(computers.single().compatible)
+        assertTrue(computers.single().newer)
+        discovery.stop()
+    }
+
+    @Test
     fun timeout_advances_queue_and_late_failure_cannot_release_next_request() {
         discovery.start()
         val first = info("First")

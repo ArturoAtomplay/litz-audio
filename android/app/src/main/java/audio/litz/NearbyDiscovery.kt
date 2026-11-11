@@ -20,7 +20,15 @@ internal data class NearbyComputer(
     val fingerprint: String,
     val endpoint: String,
     val endpoints: List<String> = listOf(endpoint),
-)
+    val version: String = PROTOCOL_VERSION,
+) {
+    val compatible
+        get() = version == PROTOCOL_VERSION
+
+    /** The computer speaks a later protocol than this app. */
+    val newer
+        get() = version.toInt() > PROTOCOL_VERSION.toInt()
+}
 
 /**
  * DNS-SD supplies addresses, never trust. Resolve serially on older Android versions, where
@@ -244,7 +252,7 @@ internal class NearbyDiscovery(
         val version = info.attributes["v"]?.toString(Charsets.UTF_8)
         val fingerprint = info.attributes["id"]?.toString(Charsets.UTF_8)?.lowercase()
         if (
-            version != PROTOCOL_VERSION ||
+            version?.matches(Regex("[0-9]{1,3}")) != true ||
                 fingerprint?.matches(Regex("[0-9a-f]{64}")) != true ||
                 info.port !in 1024..65535
         )
@@ -263,7 +271,7 @@ internal class NearbyDiscovery(
                 .distinct()
                 .take(16)
         return endpoints.firstOrNull()?.let {
-            NearbyComputer(info.serviceName.take(64), fingerprint, it, endpoints)
+            NearbyComputer(info.serviceName.take(64), fingerprint, it, endpoints, version)
         }
     }
 

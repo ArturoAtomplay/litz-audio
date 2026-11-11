@@ -47,6 +47,8 @@
     <string name="nearby_looking">Looking for computers running Litz…</string>
     <string name="nearby_none">No computers found. Tap Refresh to look again.</string>
     <string name="nearby_tap_to_pair">Tap to pair</string>
+    <string name="nearby_update_app">Uses a newer Litz. Update this app to connect.</string>
+    <string name="nearby_update_computer">Uses an older Litz. Update Litz on that computer to connect.</string>
     <string name="pairing_with">Pairing with %1$s</string>
     <string name="pairing_waiting">Waiting for your computer…</string>
     <string name="pairing_allow_if_shows">Allow the connection on your computer if it shows:</string>

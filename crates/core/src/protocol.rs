@@ -42,7 +42,6 @@ impl Stream {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Config {
     pub stream: Stream,
     pub epoch: u32,
@@ -111,17 +110,17 @@ impl Header {
 /// 480-frame Opus packets, mono mic and stereo playback. Status acknowledges
 /// the exact applied Start configuration. A trusted phone opens with GetState.
 ///
-/// Unknown fields are rejected, so serde never buffers untyped input, and
-/// every bounded field is checked while it is parsed.
+/// Unknown fields are skipped, so a later build may add one without breaking
+/// this reader; the record as a whole stays within MAX_CONTROL. Every bounded
+/// field is checked while it is parsed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Record {
     pub version: u8,
     pub request_id: u32,
     pub message: Message,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "payload", deny_unknown_fields)]
+#[serde(tag = "type", content = "payload")]
 pub enum Message {
     Capabilities {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -197,7 +196,6 @@ pub enum Route {
 /// Stable backend names only. The inventory is a bounded snapshot, not authority
 /// to use a route: ApplySettings must validate it again against live objects.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Endpoint {
     #[serde(deserialize_with = "bounds::text::<_, 256>")]
     pub name: String,
@@ -205,7 +203,6 @@ pub struct Endpoint {
     pub label: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DesktopRoutes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_runtime: Option<VoiceRuntime>,
@@ -240,7 +237,7 @@ pub enum VoiceRuntime {
 /// Computer-wide microphone preferences. Integer EQ gains prevent NaN/Infinity
 /// and keep the bounded wire contract independent of DSP library configuration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct VoiceSettings {
     pub suppression: Suppression,
     pub auto_level: bool,
@@ -402,15 +399,21 @@ mod tests {
         }
     }
     #[test]
-    fn unknown_fields_are_rejected_at_every_level() {
+    fn unknown_fields_are_skipped_at_every_level() {
         for json in [
             r#"{"version":1,"request_id":1,"message":{"type":"GetState","payload":{}},"extra":0}"#,
             r#"{"version":1,"request_id":1,"message":{"type":"GetState","payload":{},"extra":0}}"#,
             r#"{"version":1,"request_id":1,"message":{"type":"Stop","payload":{"stream":"mic","extra":0}}}"#,
             r#"{"version":1,"request_id":1,"message":{"type":"Start","payload":{"stream":"mic","epoch":1,"extra":0}}}"#,
+            r#"{"version":1,"request_id":1,"message":{"type":"ApplyVoice","payload":{"expected_revision":1,"voice":{"auto_level":true,"extra":{"nested":[1,2]}}}}}"#,
         ] {
-            assert!(Record::decode(json.as_bytes()).is_err(), "{json}");
+            assert!(Record::decode(json.as_bytes()).is_ok(), "{json}");
         }
+        let oversized = format!(
+            r#"{{"version":1,"request_id":1,"message":{{"type":"GetState","payload":{{}}}},"extra":"{}"}}"#,
+            "x".repeat(MAX_CONTROL)
+        );
+        assert!(Record::decode(oversized.as_bytes()).is_err());
     }
     #[test]
     fn pairing_names_are_short_and_printable() {

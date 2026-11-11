@@ -44,6 +44,8 @@
     <string name="nearby_looking">Buscando computadoras con Litz…</string>
     <string name="nearby_none">No se encontraron computadoras. Toca Actualizar para buscar de nuevo.</string>
     <string name="nearby_tap_to_pair">Toca para vincular</string>
+    <string name="nearby_update_app">Usa un Litz más nuevo. Actualiza esta app para conectarte.</string>
+    <string name="nearby_update_computer">Usa un Litz más antiguo. Actualiza Litz en esa computadora para conectarte.</string>
     <string name="pairing_with">Vinculando con %1$s</string>
     <string name="pairing_waiting">Esperando a tu computadora…</string>
     <string name="pairing_allow_if_shows">Permite la conexión en tu computadora si muestra:</string>

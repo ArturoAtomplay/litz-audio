@@ -49,6 +49,7 @@ internal data class UiState(
     val ready: Boolean = false,
     val fingerprint: String = "",
     val nearby: List<NearbyComputer> = emptyList(),
+    val incompatible: List<NearbyComputer> = emptyList(),
     val saved: List<SavedComputer> = emptyList(),
     val selected: String? = null,
     val pairing: String? = null,
@@ -91,17 +92,24 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             viewModelScope.launch {
                 val selectedUsb = usbEndpoint?.takeIf { it.first == mutable.value.selected }?.second
                 val candidates =
-                    nearby.map { computer ->
-                        if (computer.fingerprint == mutable.value.selected && selectedUsb != null)
-                            computer.copy(endpoints = computer.endpoints + selectedUsb)
-                        else computer
-                    }
+                    nearby
+                        .filter { it.compatible }
+                        .map { computer ->
+                            if (
+                                computer.fingerprint == mutable.value.selected &&
+                                    selectedUsb != null
+                            )
+                                computer.copy(endpoints = computer.endpoints + selectedUsb)
+                            else computer
+                        }
                 val ordered =
                     withContext(Dispatchers.IO) {
                         UsbRoutes.prefer(candidates, UsbRoutes.subnets())
                     }
                 if (update != discoveryUpdate) return@launch
-                mutable.update { it.copy(nearby = ordered) }
+                mutable.update {
+                    it.copy(nearby = ordered, incompatible = nearby.filterNot { it.compatible })
+                }
                 ordered
                     .firstOrNull { it.fingerprint == mutable.value.selected }
                     ?.endpoints

@@ -431,7 +431,7 @@ private fun AddComputer(
         }
     }
     val nearby = ui.nearby.filter { n -> ui.saved.none { it.fingerprint == n.fingerprint } }
-    if (nearby.isEmpty())
+    if (nearby.isEmpty() && ui.incompatible.isEmpty())
         Text(
             stringResource(if (ui.discovering) R.string.nearby_looking else R.string.nearby_none),
             style = MaterialTheme.typography.bodyMedium,
@@ -441,6 +441,15 @@ private fun AddComputer(
         ChoiceCard(computer.name, stringResource(R.string.nearby_tap_to_pair), enabled = !busy) {
             candidate = computer
         }
+    }
+    ui.incompatible.forEach { computer ->
+        ChoiceCard(
+            computer.name,
+            stringResource(
+                if (computer.newer) R.string.nearby_update_app else R.string.nearby_update_computer
+            ),
+            enabled = false,
+        ) {}
     }
     OutlinedButton(
         onClick = { manualDialog = true },
