@@ -1,7 +1,7 @@
 use crate::Identity;
 use crate::failure::Failure;
 use litz_core::{
-    protocol::{DeviceId, Message, PairOutcome, Record},
+    protocol::{DeviceId, Message, PairOutcome, Record, close},
     session::{commitment, fingerprint, verification_code},
     transport::{self, Control, Result},
 };
@@ -155,7 +155,7 @@ async fn pair(
     };
     // The runtime ends with this call; without waiting, CLOSE is never sent and
     // the computer keeps prompting for a phone that already gave up.
-    endpoint.close(0u8.into(), b"pairing ended");
+    endpoint.close(close::ENDED, b"pairing ended");
     let _ = tokio::time::timeout(Duration::from_secs(1), endpoint.wait_idle()).await;
     result
 }

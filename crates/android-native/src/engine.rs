@@ -1,10 +1,11 @@
 use crate::Identity;
 use crate::audio::{Audio, AudioInfo, GainLimiter, ListeningStats};
-use crate::failure::{FORGOTTEN, Failure, MOVED, cause};
+use crate::failure::{Failure, cause};
 use litz_core::media::codec::Encoder;
 use litz_core::media::receiver::Receiver;
 use litz_core::protocol::{
-    Code, Config, DesktopRoutes, FRAME, MAX_DATAGRAM, Message, Record, Route, Stream, VoiceSettings,
+    Code, Config, DesktopRoutes, FRAME, MAX_DATAGRAM, Message, Record, Route, Stream,
+    VoiceSettings, close,
 };
 use litz_core::transport::{self, Control, MediaSender, Result};
 use std::net::SocketAddr;
@@ -520,7 +521,7 @@ type Handoff = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<Con
 impl Drop for Connected {
     fn drop(&mut self) {
         self.media.clear();
-        self.media.connection.close(0u8.into(), b"phone stopped");
+        self.media.connection.close(close::ENDED, b"phone stopped");
     }
 }
 impl Connected {
@@ -933,7 +934,7 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
     .await
     .map_err(|_| Failure::ConnectTimeout)?
     .map_err(|error| -> transport::Error {
-        if matches!(&error, quinn::ConnectionError::TransportError(e) if u64::from(e.code) == 0x178)
+        if matches!(&error, quinn::ConnectionError::TransportError(e) if u64::from(e.code) == close::NO_COMMON_PROTOCOL)
         {
             Failure::ProtocolMismatch.into()
         } else {
@@ -997,7 +998,9 @@ fn retryable(error: &(dyn std::error::Error + 'static)) -> bool {
         if let Some(connection) = e.downcast_ref::<quinn::ConnectionError>() {
             return match connection {
                 quinn::ConnectionError::Reset | quinn::ConnectionError::TimedOut => true,
-                quinn::ConnectionError::ApplicationClosed(close) => close.error_code == 0u32.into(),
+                quinn::ConnectionError::ApplicationClosed(closed) => {
+                    closed.error_code == close::ENDED
+                }
                 _ => false,
             };
         }
@@ -1034,7 +1037,9 @@ enum Recovery {
 impl Recovery {
     fn after(error: &(dyn std::error::Error + 'static), retry_anyway: bool) -> Self {
         let forgotten = match cause::<quinn::ConnectionError>(error) {
-            Some(quinn::ConnectionError::ApplicationClosed(close)) => close.error_code == FORGOTTEN,
+            Some(quinn::ConnectionError::ApplicationClosed(closed)) => {
+                closed.error_code == close::FORGOTTEN
+            }
             _ => false,
         };
         if forgotten || cause::<Failure>(error) == Some(&Failure::Revoked) {
@@ -1432,10 +1437,10 @@ impl Supervisor {
             .as_ref()
             .and_then(|c| c.media.connection.close_reason());
         let close_code = match &closed {
-            Some(quinn::ConnectionError::ApplicationClosed(close)) => Some(close.error_code),
+            Some(quinn::ConnectionError::ApplicationClosed(closed)) => Some(closed.error_code),
             _ => None,
         };
-        let deliberate = close_code == Some(MOVED) || close_code == Some(FORGOTTEN);
+        let deliberate = close_code == Some(close::MOVED) || close_code == Some(close::FORGOTTEN);
         if deliberate {
             self.stop_wanting_audio();
         }
@@ -1444,10 +1449,10 @@ impl Supervisor {
                 || retryable(error.as_ref())
                 || closed.as_ref().is_some_and(|e| retryable(e)));
         self.lost(&error, network);
-        if close_code == Some(FORGOTTEN) {
+        if close_code == Some(close::FORGOTTEN) {
             self.recovery = Recovery::PairAgain;
         }
-        if close_code == Some(MOVED)
+        if close_code == Some(close::MOVED)
             && let Ok(observer) = connect(&self.identity).await
         {
             self.connected = Some(observer);

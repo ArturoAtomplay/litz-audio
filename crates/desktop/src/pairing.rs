@@ -1,5 +1,5 @@
 use crate::identity::{self, Identity};
-use litz_core::protocol::Message;
+use litz_core::protocol::{Message, close};
 use litz_core::session::Trust;
 use litz_core::transport;
 use std::path::PathBuf;
@@ -191,7 +191,7 @@ impl Hub {
                     hub.failed.store(true, Ordering::Release);
                     *hub.trust.write().unwrap() = Trust::default();
                     for (_, connection) in hub.connections.lock().unwrap().iter() {
-                        connection.close(0x22u32.into(), b"identity storage requires restart");
+                        connection.close(close::STORAGE, b"identity storage requires restart");
                     }
                 }
                 return Err(error.to_string().into());
@@ -210,7 +210,7 @@ impl Hub {
     fn revoke(&self, cert: &[u8]) {
         for (peer, connection) in self.connections.lock().unwrap().iter() {
             if peer == cert {
-                connection.close(0x21u32.into(), b"forgotten; pair again");
+                connection.close(close::FORGOTTEN, b"forgotten; pair again");
             }
         }
         let mut lease = self.lease.lock().unwrap();
@@ -219,7 +219,7 @@ impl Hub {
         {
             owner
                 .connection
-                .close(0x21u32.into(), b"forgotten; pair again");
+                .close(close::FORGOTTEN, b"forgotten; pair again");
         }
     }
     fn state(lease: &Lease, connection: &quinn::Connection) -> Message {
@@ -276,7 +276,7 @@ impl Hub {
         if let Some(previous) = previous {
             previous
                 .connection
-                .close(0x20u32.into(), b"audio moved to another phone");
+                .close(close::MOVED, b"audio moved to another phone");
         }
         Ok(Self::state(&lease, connection))
     }

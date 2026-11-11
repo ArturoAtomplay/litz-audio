@@ -12,6 +12,26 @@ pub const MAX_CONTROL: usize = 65536;
 pub const FRAME: usize = 480;
 pub const APPROVAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Why a connection was closed. The phone decides from these whether to
+/// reconnect, stop, or pair again, so they are part of the wire protocol.
+pub mod close {
+    use quinn::VarInt;
+
+    /// Ended normally; the phone may reconnect.
+    pub const ENDED: VarInt = VarInt::from_u32(0);
+    /// The session failed on the computer.
+    pub const FAILED: VarInt = VarInt::from_u32(1);
+    /// Another phone took the audio.
+    pub const MOVED: VarInt = VarInt::from_u32(0x20);
+    /// The computer no longer trusts this phone.
+    pub const FORGOTTEN: VarInt = VarInt::from_u32(0x21);
+    /// The computer could not save its registry and must restart.
+    pub const STORAGE: VarInt = VarInt::from_u32(0x22);
+    /// QUIC's transport error for the TLS alert no_application_protocol: the
+    /// peer speaks another protocol version.
+    pub const NO_COMMON_PROTOCOL: u64 = 0x178;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stream {
@@ -379,6 +399,18 @@ mod bounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn close_codes_keep_their_wire_values() {
+        let codes = [
+            close::ENDED,
+            close::FAILED,
+            close::MOVED,
+            close::FORGOTTEN,
+            close::STORAGE,
+        ];
+        assert_eq!(codes.map(u64::from), [0, 1, 0x20, 0x21, 0x22]);
+        assert_eq!(close::NO_COMMON_PROTOCOL, 0x100 + 120);
+    }
     #[test]
     fn pairing_messages_roundtrip() {
         for message in [

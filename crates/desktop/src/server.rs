@@ -5,7 +5,7 @@ use litz_core::{
     pcm::PcmProducer,
     protocol::{
         Code, DesktopRoutes, DeviceId, Endpoint, Message, PairOutcome, Record, Route, Suppression,
-        VoiceSettings,
+        VoiceSettings, close,
     },
     transport::{self, Control},
     wake::Wake,
@@ -184,13 +184,13 @@ async fn listen(
                     if let Err(error) = &result { eprintln!("Litz connection ended: {error}"); }
                     hub.release(&c);
                     hub.unregister(&c);
-                    c.close(if result.is_ok() { 0u8 } else { 1u8 }.into(), b"session ended");
+                    c.close(if result.is_ok() { close::ENDED } else { close::FAILED }, b"session ended");
                 });
             }
         }
     }
     commands.abort();
-    endpoint.close(0u8.into(), b"shutdown");
+    endpoint.close(close::ENDED, b"shutdown");
     workers.shutdown().await;
 
     Ok(())

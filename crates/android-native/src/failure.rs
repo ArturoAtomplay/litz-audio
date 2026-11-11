@@ -1,9 +1,6 @@
 //! What went wrong, as data. The app chooses and translates the words.
-use litz_core::protocol::Code;
+use litz_core::protocol::{Code, close};
 use std::error::Error;
-
-pub const MOVED: quinn::VarInt = quinn::VarInt::from_u32(0x20);
-pub const FORGOTTEN: quinn::VarInt = quinn::VarInt::from_u32(0x21);
 
 #[derive(Clone, Debug, PartialEq, uniffi::Error)]
 pub enum Failure {
@@ -61,12 +58,14 @@ impl Failure {
         }
         if let Some(closed) = cause::<quinn::ConnectionError>(error) {
             return match closed {
-                quinn::ConnectionError::ApplicationClosed(close)
-                    if close.error_code == FORGOTTEN =>
+                quinn::ConnectionError::ApplicationClosed(reason)
+                    if reason.error_code == close::FORGOTTEN =>
                 {
                     Self::Revoked
                 }
-                quinn::ConnectionError::ApplicationClosed(close) if close.error_code == MOVED => {
+                quinn::ConnectionError::ApplicationClosed(reason)
+                    if reason.error_code == close::MOVED =>
+                {
                     Self::Moved
                 }
                 quinn::ConnectionError::ApplicationClosed(_)
