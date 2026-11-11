@@ -44,6 +44,11 @@ pub async fn raise_thread_priority() {
 }
 #[cfg(windows)]
 pub async fn raise_thread_priority() {
+    pro_audio_thread();
+}
+/// Registers the calling thread with the Multimedia Class Scheduler.
+#[cfg(windows)]
+pub fn pro_audio_thread() {
     use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
     let mut task = 0;
     // SAFETY: a static NUL-terminated task name and a valid out pointer. The
@@ -52,7 +57,7 @@ pub async fn raise_thread_priority() {
         unsafe { AvSetMmThreadCharacteristicsW(windows_sys::core::w!("Pro Audio"), &mut task) };
     if handle.is_null() {
         eprintln!(
-            "litzd: engine thread keeps the default priority: {}",
+            "litzd: thread keeps the default priority: {}",
             io::Error::last_os_error()
         );
     }
