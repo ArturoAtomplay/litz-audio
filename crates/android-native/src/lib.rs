@@ -4,6 +4,8 @@
 mod audio;
 mod engine;
 mod failure;
+#[cfg(target_os = "android")]
+mod oboe;
 mod pairing;
 
 use failure::Failure;

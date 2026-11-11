@@ -269,26 +269,7 @@ impl Engine {
 impl Engine {
     fn start(identity: Identity) -> Result<Self> {
         #[cfg(target_os = "android")]
-        {
-            static PANIC_LOG: std::sync::Once = std::sync::Once::new();
-            PANIC_LOG.call_once(|| {
-                let previous = std::panic::take_hook();
-                std::panic::set_hook(Box::new(move |info| {
-                    unsafe extern "C" {
-                        fn __android_log_write(
-                            priority: libc::c_int,
-                            tag: *const libc::c_char,
-                            text: *const libc::c_char,
-                        ) -> libc::c_int;
-                    }
-                    if let Ok(message) = std::ffi::CString::new(info.to_string()) {
-                        // SAFETY: both C strings stay live for the synchronous log call.
-                        unsafe { __android_log_write(6, c"LitzNative".as_ptr(), message.as_ptr()) };
-                    }
-                    previous(info);
-                }));
-            });
-        }
+        crate::oboe::log_panics();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -302,10 +283,7 @@ impl Engine {
             .stack_size(4 * 1024 * 1024)
             .spawn(move || {
                 #[cfg(target_os = "android")]
-                // SAFETY: adjusts only the calling thread; failure keeps the default.
-                unsafe {
-                    libc::setpriority(libc::PRIO_PROCESS as _, libc::gettid() as _, -16);
-                }
+                crate::oboe::raise_thread_priority();
                 runtime.block_on(Box::pin(run(identity, rx, stopped, worker_cancelled)));
             })?;
         Ok(Self {

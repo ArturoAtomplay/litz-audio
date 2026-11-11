@@ -162,7 +162,6 @@ impl Bridge {
     }
 }
 
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, uniffi::Record)]
 pub struct AudioInfo {
     pub input_rate: i32,
@@ -180,19 +179,32 @@ pub struct AudioInfo {
     pub error: i32,
     pub source: i32,
 }
+
 #[cfg(target_os = "android")]
-unsafe extern "C" {
-    fn litz_audio_open(
-        bridge: *mut c_void,
-        mic: bool,
-        playback: bool,
-        input: i32,
-        output: i32,
-        source: i32,
-    ) -> *mut c_void;
-    fn litz_audio_start(audio: *mut c_void) -> i32;
-    fn litz_audio_info(audio: *mut c_void, info: *mut AudioInfo);
-    fn litz_audio_close(audio: *mut c_void);
+use crate::oboe::Device;
+
+/// Off Android there is no audio device to open; the engine still builds
+/// there so its tests and the app's JVM tests can run.
+#[cfg(not(target_os = "android"))]
+enum Device {}
+#[cfg(not(target_os = "android"))]
+impl Device {
+    unsafe fn open(
+        _bridge: *mut c_void,
+        _mic: bool,
+        _playback: bool,
+        _input: i32,
+        _output: i32,
+        _source: i32,
+    ) -> Option<Self> {
+        None
+    }
+    fn start(&self) -> bool {
+        match *self {}
+    }
+    fn info(&self) -> AudioInfo {
+        match *self {}
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, uniffi::Record)]
@@ -203,7 +215,8 @@ pub struct ListeningStats {
 }
 
 pub struct Audio {
-    native: *mut c_void,
+    // Dropped first: closing the device joins the callbacks that use `bridge`.
+    device: Device,
     bridge: Box<Bridge>,
     ends: Ends,
     pub wake: WakeListener,
@@ -218,28 +231,12 @@ impl Audio {
     ) -> litz_core::transport::Result<Self> {
         let (mut bridge, ends) = Bridge::try_new()?;
         let wake = WakeListener::try_new(bridge.wake.clone())?;
-        #[cfg(target_os = "android")]
-        // SAFETY: bridge has a stable heap address and remains live until C++ closes its callbacks.
-        let native = unsafe {
-            litz_audio_open(
-                (&mut *bridge as *mut Bridge).cast(),
-                mic,
-                playback,
-                input,
-                output,
-                source,
-            )
-        };
-        #[cfg(not(target_os = "android"))]
-        let native = {
-            let _ = (&mut bridge, mic, playback, input, output, source);
-            std::ptr::null_mut::<c_void>()
-        };
-        if native.is_null() {
-            return Err(crate::failure::Failure::AudioUnavailable.into());
-        }
+        let pointer = (&mut *bridge as *mut Bridge).cast();
+        // SAFETY: bridge has a stable heap address and outlives the device, which is dropped first.
+        let device = unsafe { Device::open(pointer, mic, playback, input, output, source) }
+            .ok_or(crate::failure::Failure::AudioUnavailable)?;
         Ok(Self {
-            native,
+            device,
             bridge,
             ends,
             wake,
@@ -247,9 +244,7 @@ impl Audio {
     }
     pub fn start(&mut self) -> litz_core::transport::Result<()> {
         self.bridge.active.store(true, Ordering::Release);
-        #[cfg(target_os = "android")]
-        // SAFETY: native is a live handle returned by litz_audio_open and owned by Self.
-        if unsafe { litz_audio_start(self.native) } != 0 {
+        if !self.device.start() {
             return Err(crate::failure::Failure::AudioUnavailable.into());
         }
         Ok(())
@@ -300,25 +295,12 @@ impl Audio {
         self.bridge.callback_frames.load(Ordering::Relaxed)
     }
     pub fn info(&self) -> AudioInfo {
-        let mut info = AudioInfo::default();
-        #[cfg(target_os = "android")]
-        // SAFETY: native remains live for Self; C++ writes only the provided AudioInfo.
-        unsafe {
-            litz_audio_info(self.native, &mut info);
-        }
-        #[cfg(not(target_os = "android"))]
-        let _ = (&mut info, self.native);
-        info
+        self.device.info()
     }
 }
 impl Drop for Audio {
     fn drop(&mut self) {
         self.silence();
-        #[cfg(target_os = "android")]
-        // SAFETY: Self owns native; close joins callbacks before bridge and rings drop.
-        unsafe {
-            litz_audio_close(self.native);
-        }
     }
 }
 
