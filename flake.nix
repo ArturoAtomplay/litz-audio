@@ -98,7 +98,6 @@
             pkgs.rustfmt
             pkgs.clippy
             pkgs.cargo-audit
-            pkgs.cargo-about
             pkgs.pipewire
             pkgs.wireplumber
             pkgs.pulseaudio

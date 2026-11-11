@@ -12,13 +12,21 @@ accepted = [
     "Unlicense",
     "MPL-2.0",
 ]
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-pc-windows-msvc",
-    "aarch64-linux-android",
-    "x86_64-linux-android",
-]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 private = { ignore = true }
+
+[opusic-sys.clarify]
+license = "BSD-3-Clause"
+files = [{ path = "LICENSE", checksum = "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551" }]
+
+[ring.clarify]
+license = "Apache-2.0 AND ISC"
+files = [
+    { path = "LICENSE-BoringSSL", license = "Apache-2.0", checksum = "005fc765ddc5115da796cca915baa9557abae13ff35e0a47c47affc56f6c414d" },
+    { path = "LICENSE-other-bits", license = "ISC", checksum = "f025ccfb7dfb6bdfedc75ca0f67acc69e6fb4998143d834f7c2f38a29989680f" },
+]
+
+[rcgen.clarify]
+license = "MIT OR Apache-2.0"
+files = [{ path = "LICENSE", license = "MIT", checksum = "017986d055737c5ca0f7f41fb1a54e3464924b9b04f430988d8ebe21b6884c40", start = "The MIT License (MIT)", end = "DEALINGS IN THE\nSOFTWARE." }]
