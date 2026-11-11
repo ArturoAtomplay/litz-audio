@@ -49,11 +49,11 @@ impl Wake {
     }
 }
 
-#[cfg(windows)]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 #[derive(Clone)]
 pub struct Wake(Arc<tokio::sync::Notify>);
 
-#[cfg(windows)]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 impl Wake {
     pub fn try_new() -> std::io::Result<Self> {
         Ok(Self(Arc::new(tokio::sync::Notify::new())))
@@ -68,7 +68,7 @@ impl Wake {
 pub struct WakeListener {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fd: tokio::io::unix::AsyncFd<Wake>,
-    #[cfg(windows)]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     wake: Wake,
 }
 
@@ -79,7 +79,7 @@ impl WakeListener {
             // SAFETY: Wake owns the descriptor for as long as it is registered.
             fd: unsafe { tokio::io::unix::AsyncFd::register(wake)? },
         });
-        #[cfg(windows)]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         Ok(Self { wake })
     }
 
@@ -90,7 +90,7 @@ impl WakeListener {
             self.fd.get_ref().drain();
             guard.clear_ready();
         }
-        #[cfg(windows)]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         self.wake.0.notified().await;
         Ok(())
     }
