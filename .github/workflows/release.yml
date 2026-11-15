@@ -20,7 +20,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libclang-dev pkg-config cmake rpm
+      - run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libpulse-dev libclang-dev pkg-config cmake rpm
       - run: packaging/fetch-model.sh target/model
       - run: cargo build --locked --profile dist -p litzd
       - name: Portable tarball

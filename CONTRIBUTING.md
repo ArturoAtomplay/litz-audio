@@ -7,7 +7,7 @@ Thanks for helping. Bug reports, fixes, device test results and translations are
 Open an issue with the bug report form. Include:
 
 - the Litz version on the phone and on the computer (`litzd --version`),
-- the phone model and Android version, and the computer's OS (and PipeWire version on Linux),
+- the phone model and Android version, and the computer's OS (and PipeWire or PulseAudio version on Linux),
 - what you did, what you expected and what happened,
 - the report from **Settings → About → Diagnostics** in the app, if you can open it.
 

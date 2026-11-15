@@ -5,19 +5,48 @@ pub mod capture;
 #[path = "wasapi/capture.rs"]
 pub mod capture;
 #[cfg(target_os = "linux")]
+mod mic;
+#[cfg(target_os = "linux")]
 pub mod pipewire;
+#[cfg(target_os = "linux")]
+mod pulse;
 #[cfg(all(feature = "test-tone", target_os = "linux"))]
 mod tone;
 pub mod voice;
 #[cfg(windows)]
 pub mod wasapi;
 #[cfg(target_os = "linux")]
-pub type CommandSender = ::pipewire::channel::Sender<crate::server::CaptureCommand>;
+#[derive(Clone)]
+pub enum CommandSender {
+    PipeWire(::pipewire::channel::Sender<crate::server::CaptureCommand>),
+    Pulse(pulse::CommandSender),
+}
+#[cfg(target_os = "linux")]
+impl CommandSender {
+    pub fn send(
+        &self,
+        command: crate::server::CaptureCommand,
+    ) -> Result<(), crate::server::CaptureCommand> {
+        match self {
+            Self::PipeWire(sender) => sender.send(command),
+            Self::Pulse(sender) => sender.send(command),
+        }
+    }
+}
 #[cfg(windows)]
 pub type CommandSender = wasapi::CommandSender;
 
 #[cfg(target_os = "linux")]
-pub use pipewire::run;
+pub fn run(
+    tone: bool,
+    route: Option<litz_core::protocol::Route>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !tone && pulse::serves_audio() {
+        eprintln!("litzd: using PulseAudio");
+        return pulse::run(route);
+    }
+    pipewire::run(tone, route)
+}
 #[cfg(windows)]
 pub use wasapi::run;
 

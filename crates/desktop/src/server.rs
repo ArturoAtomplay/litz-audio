@@ -485,7 +485,7 @@ mod tests {
 
     fn ports() -> transport::Result<Ports> {
         #[cfg(target_os = "linux")]
-        let commands = pipewire::channel::channel().0;
+        let commands = crate::audio::CommandSender::PipeWire(pipewire::channel::channel().0);
         #[cfg(windows)]
         let commands = crate::audio::CommandSender::channel().0;
         Ok(Ports {

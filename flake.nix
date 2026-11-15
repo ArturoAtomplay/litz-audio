@@ -12,7 +12,10 @@
         pkgs.rustPlatform.bindgenHook
         pkgs.cmake
       ];
-      buildInputs = [ pkgs.pipewire ];
+      buildInputs = [
+        pkgs.pipewire
+        pkgs.libpulseaudio
+      ];
       ndkVersion = "28.2.13676358";
       minimumApi = 23;
       # Same revision as the deep_filter git dependency; litzd loads its

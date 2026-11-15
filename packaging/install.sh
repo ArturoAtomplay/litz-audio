@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Litz Audio for the current user on Linux. Needs PipeWire 1.x, no root.
+# Install Litz Audio for the current user on Linux. Needs PipeWire 1.x or PulseAudio, no root.
 #   curl -fsSL https://github.com/ArturoAtomplay/litz-audio/releases/latest/download/install.sh | sh
 set -eu
 

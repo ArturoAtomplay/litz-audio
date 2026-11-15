@@ -40,7 +40,7 @@ impl Wake {
         }
     }
 
-    fn drain(&self) {
+    pub fn drain(&self) {
         let mut value = 0u64;
         // SAFETY: valid nonblocking eventfd and 8-byte output buffer.
         unsafe {

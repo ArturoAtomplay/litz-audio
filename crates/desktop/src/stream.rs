@@ -790,7 +790,7 @@ mod tests {
             });
             mainloop.run();
         });
-        commands
+        crate::audio::CommandSender::PipeWire(commands)
     }
 
     #[cfg(windows)]
@@ -864,6 +864,8 @@ mod tests {
         // Nothing answers audio-thread commands, like an audio loop that is busy.
         #[cfg(target_os = "linux")]
         let (commands, _audio_thread) = pipewire::channel::channel();
+        #[cfg(target_os = "linux")]
+        let commands = crate::audio::CommandSender::PipeWire(commands);
         #[cfg(windows)]
         let (commands, _audio_thread) = crate::audio::CommandSender::channel();
         let (mic, mut heard) = litz_core::pcm::channel();

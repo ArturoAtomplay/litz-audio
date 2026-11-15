@@ -1,4 +1,4 @@
-//! Real agent + private PipeWire, no hardware or global routing changes.
+//! Real agent + private sound server, no hardware or global routing changes.
 #![cfg(target_os = "linux")]
 use litz_core::{
     protocol::{Code, Config, DeviceId, Message, Record, Route, Stream},
@@ -141,9 +141,13 @@ struct Agent {
     state: std::path::PathBuf,
 }
 
-/// Starts a private PipeWire, optionally WirePlumber, and the agent, and pairs
-/// one phone with it.
-async fn start(name: &str, pipewire: &str, wireplumber: bool) -> Agent {
+enum Sound<'a> {
+    PipeWire { config: &'a str, wireplumber: bool },
+    Pulse { script: &'a str },
+}
+
+/// Starts a private sound server and the agent, and pairs one phone with it.
+async fn start(name: &str, sound: Sound<'_>) -> Agent {
     let mut nonce = [0; 8];
     getrandom::fill(&mut nonce).unwrap();
     let directory =
@@ -155,38 +159,72 @@ async fn start(name: &str, pipewire: &str, wireplumber: bool) -> Agent {
         prompts: None,
         directory: directory.clone(),
     };
-    let config = directory.join("pipewire.conf");
-    fs::write(&config, pipewire).unwrap();
-    fixture.children.push(
-        Command::new("pipewire")
-            .args(["-c", config.to_str().unwrap()])
-            .env("XDG_RUNTIME_DIR", &directory)
-            .env("PIPEWIRE_RUNTIME_DIR", &directory)
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap(),
-    );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !directory.join("pipewire-0").exists() {
-        assert!(Instant::now() < deadline, "private PipeWire did not start");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    if wireplumber {
-        fixture.children.push(
-            Command::new("wireplumber")
-                .args(["-p", "policy"])
-                .env("XDG_RUNTIME_DIR", &directory)
-                .env("PIPEWIRE_RUNTIME_DIR", &directory)
-                .env("XDG_STATE_HOME", &directory)
-                .env("XDG_CONFIG_HOME", &directory)
-                .env_remove("DBUS_SESSION_BUS_ADDRESS")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+    match sound {
+        Sound::PipeWire {
+            config: pipewire,
+            wireplumber,
+        } => {
+            let config = directory.join("pipewire.conf");
+            fs::write(&config, pipewire).unwrap();
+            fixture.children.push(
+                Command::new("pipewire")
+                    .args(["-c", config.to_str().unwrap()])
+                    .env("XDG_RUNTIME_DIR", &directory)
+                    .env("PIPEWIRE_RUNTIME_DIR", &directory)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .unwrap(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !directory.join("pipewire-0").exists() {
+                assert!(Instant::now() < deadline, "private PipeWire did not start");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            if wireplumber {
+                fixture.children.push(
+                    Command::new("wireplumber")
+                        .args(["-p", "policy"])
+                        .env("XDG_RUNTIME_DIR", &directory)
+                        .env("PIPEWIRE_RUNTIME_DIR", &directory)
+                        .env("XDG_STATE_HOME", &directory)
+                        .env("XDG_CONFIG_HOME", &directory)
+                        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .unwrap(),
+                );
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+            }
+        }
+        Sound::Pulse { script } => {
+            let config = directory.join("default.pa");
+            fs::write(&config, script).unwrap();
+            fixture.children.push(
+                Command::new("pulseaudio")
+                    .args(["-n", "--daemonize=no", "--exit-idle-time=-1", "-F"])
+                    .arg(&config)
+                    .env("XDG_RUNTIME_DIR", &directory)
+                    .env("HOME", &directory)
+                    .env("XDG_CONFIG_HOME", &directory)
+                    .env_remove("PULSE_SERVER")
+                    .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                    .env_remove("DISPLAY")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !directory.join("pulse/native").exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "private PulseAudio did not start"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
     }
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
@@ -216,6 +254,9 @@ async fn start(name: &str, pipewire: &str, wireplumber: bool) -> Agent {
             .env("XDG_STATE_HOME", &directory)
             .env("XDG_RUNTIME_DIR", &directory)
             .env("PIPEWIRE_RUNTIME_DIR", &directory)
+            .env("HOME", &directory)
+            .env("XDG_CONFIG_HOME", &directory)
+            .env_remove("PULSE_SERVER")
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
@@ -287,7 +328,14 @@ async fn live_routes_are_revision_checked_and_do_not_restart_the_agent() {
         cert,
         directory,
         state,
-    } = start("routes", ROUTES, false).await;
+    } = start(
+        "routes",
+        Sound::PipeWire {
+            config: ROUTES,
+            wireplumber: false,
+        },
+    )
+    .await;
     let cli_directory = fixture.directory.clone();
     let litzd = move |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_litzd"))
@@ -728,7 +776,14 @@ context.objects = [
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires pipewire and wireplumber executables; run in nix develop"]
 async fn the_default_output_is_followed_without_reopening_the_capture() {
-    let agent = start("follow", SESSION, true).await;
+    let agent = start(
+        "follow",
+        Sound::PipeWire {
+            config: SESSION,
+            wireplumber: true,
+        },
+    )
+    .await;
     let directory = agent.directory.clone();
     let tool = |program: &str, args: &[&str]| {
         assert!(
@@ -911,4 +966,301 @@ async fn the_default_output_is_followed_without_reopening_the_capture() {
         "agent exited while following the default output"
     );
     connection.close(0u8.into(), b"test complete");
+}
+
+/// litzd left these behind when it was killed; it must replace them.
+const PULSE: &str = r#"
+load-module module-native-protocol-unix
+load-module module-null-sink sink_name=test.a sink_properties='device.description="Output A" device.class=sound'
+load-module module-null-sink sink_name=test.b sink_properties='device.description="Output B" device.class=sound'
+load-module module-null-sink sink_name=litz.microphone_sink format=float32le rate=48000 channels=1
+load-module module-remap-source source_name=litz.microphone master=litz.microphone_sink.monitor channels=1
+set-default-sink test.a
+"#;
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires the pulseaudio executable; run in nix develop"]
+async fn pulseaudio_serves_the_microphone_and_follows_the_default_output() {
+    let agent = start("pulse", Sound::Pulse { script: PULSE }).await;
+    let directory = agent.directory.clone();
+    let pactl = |args: &[&str]| {
+        let output = Command::new("pactl")
+            .args(args)
+            .env("XDG_RUNTIME_DIR", &directory)
+            .env("HOME", &directory)
+            .env_remove("PULSE_SERVER")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "pactl {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let named = |kind: &str, name: &str| {
+        pactl(&["list", "short", kind])
+            .lines()
+            .filter(|line| line.split('\t').nth(1) == Some(name))
+            .count()
+    };
+    assert_eq!(named("sources", "litz.microphone"), 1);
+    assert_eq!(named("sinks", "litz.microphone_sink"), 1);
+
+    let connection = agent
+        .endpoint
+        .connect(agent.address, "litz.local")
+        .unwrap()
+        .await
+        .unwrap();
+    let mut control = Control::new(connection.open_bi().await.unwrap());
+    rpc(&mut control, 1, Message::GetState {}).await;
+    rpc(
+        &mut control,
+        2,
+        Message::Acquire {
+            expected_generation: None,
+        },
+    )
+    .await;
+    let Message::Capabilities {
+        desktop: Some(desktop),
+    } = rpc(&mut control, 3, capabilities()).await
+    else {
+        panic!("missing routes")
+    };
+    assert_eq!(desktop.effective, Some(Route::Mirror { name: None }));
+    assert_eq!(desktop.resolved.as_deref(), Some("test.a"));
+    let mut names: Vec<_> = desktop.endpoints.iter().map(|e| e.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["test.a", "test.b"]);
+    assert!(desktop.endpoints.iter().any(|e| e.label == "Output A"));
+
+    let mic = Config {
+        stream: Stream::Mic,
+        epoch: 1,
+    };
+    assert!(matches!(
+        rpc(&mut control, 4, Message::Start(mic)).await,
+        Message::Status {
+            running: [Some(_), None],
+            ..
+        }
+    ));
+    let mut recorder = Command::new("parec")
+        .args(["-d", "litz.microphone", "--raw", "--format=float32le"])
+        .args(["--rate=48000", "--channels=1", "--latency-msec=20"])
+        .env("XDG_RUNTIME_DIR", &directory)
+        .env("HOME", &directory)
+        .env_remove("PULSE_SERVER")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut recorded = recorder.stdout.take().unwrap();
+    let heard = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut bytes = vec![0; 48_000 * 4];
+        recorded.read_exact(&mut bytes).unwrap();
+        bytes
+    });
+    let mut encoder = litz_core::media::codec::Encoder::try_new(mic).unwrap();
+    let mut packet = [0; litz_core::protocol::MAX_DATAGRAM];
+    let mut ticks = tokio::time::interval(Duration::from_millis(10));
+    for frame in 0..200 {
+        ticks.tick().await;
+        let voice: Vec<f32> = (0..480)
+            .map(|n| ((frame * 480 + n) as f32 * 0.13).sin() * 0.5)
+            .collect();
+        let size = encoder.encode(&voice, &mut packet, 1100).unwrap();
+        connection
+            .send_datagram(packet[..size].to_vec().into())
+            .unwrap();
+    }
+    let heard = heard.join().unwrap();
+    let _ = recorder.kill();
+    let _ = recorder.wait();
+    let loudest = heard
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|sample| f32::from_ne_bytes(*sample).abs())
+        .fold(0.0, f32::max);
+    assert!(
+        loudest > 0.2,
+        "the phone's voice did not reach litz.microphone: {loudest}"
+    );
+
+    let playback = Config {
+        stream: Stream::Playback,
+        epoch: 2,
+    };
+    assert!(matches!(
+        rpc(&mut control, 5, Message::Start(playback)).await,
+        Message::Status {
+            running: [Some(_), Some(_)],
+            ..
+        }
+    ));
+    let mut player = Command::new("pacat")
+        .args([
+            "--raw",
+            "--format=float32le",
+            "--rate=48000",
+            "--channels=2",
+        ])
+        .env("XDG_RUNTIME_DIR", &directory)
+        .env("HOME", &directory)
+        .env_remove("PULSE_SERVER")
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut tone = player.stdin.take().unwrap();
+    std::thread::spawn(move || {
+        let frame: Vec<u8> = (0..480)
+            .flat_map(|_| [0.25f32.to_ne_bytes(), 0.25f32.to_ne_bytes()].concat())
+            .collect();
+        while tone.write_all(&frame).is_ok() {}
+    });
+    let mut fixture = agent.fixture;
+    fixture.children.push(player);
+    let listened = Instant::now();
+    let mut packets = 0;
+    while listened.elapsed() < Duration::from_secs(1) {
+        connection.read_datagram().await.unwrap();
+        packets += 1;
+    }
+    assert!(packets > 50, "no computer audio: {packets} packets");
+
+    async fn pushed(control: &mut Control, resolved: Option<&str>) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let record = tokio::time::timeout_at(deadline, control.read())
+                .await
+                .unwrap_or_else(|_| panic!("{resolved:?} was not followed"))
+                .unwrap();
+            assert_eq!(record.request_id, 0);
+            let Message::Capabilities {
+                desktop: Some(desktop),
+            } = record.message
+            else {
+                panic!("following the default output stopped listening");
+            };
+            if desktop.resolved.as_deref() == resolved {
+                return;
+            }
+        }
+    }
+    pactl(&["set-default-sink", "test.b"]);
+    pushed(&mut control, Some("test.b")).await;
+    let started = Instant::now();
+    connection.read_datagram().await.unwrap();
+    assert!(started.elapsed() < Duration::from_millis(150));
+    let module = pactl(&["list", "short", "modules"])
+        .lines()
+        .find(|line| line.contains("sink_name=test.b"))
+        .and_then(|line| line.split('\t').next().map(str::to_owned))
+        .unwrap();
+    pactl(&["unload-module", &module]);
+    pushed(&mut control, Some("test.a")).await;
+    pactl(&["set-default-sink", "litz.microphone_sink"]);
+    pushed(&mut control, None).await;
+    pactl(&["set-default-sink", "test.a"]);
+    pushed(&mut control, Some("test.a")).await;
+    assert!(matches!(
+        rpc(&mut control, 6, Message::GetState {}).await,
+        Message::Status {
+            running: [Some(_), Some(_)],
+            ..
+        }
+    ));
+    rpc(
+        &mut control,
+        7,
+        Message::Stop {
+            stream: Stream::Playback,
+        },
+    )
+    .await;
+
+    assert!(matches!(
+        rpc(
+            &mut control,
+            8,
+            Message::ApplySettings {
+                expected_revision: 0,
+                route: Route::PhoneOnly,
+            }
+        )
+        .await,
+        Message::Status { revision: 1, .. }
+    ));
+    assert_eq!(named("sinks", "litz.speaker"), 1);
+    assert!(matches!(
+        rpc(
+            &mut control,
+            9,
+            Message::ApplySettings {
+                expected_revision: 1,
+                route: Route::PhoneOnly,
+            }
+        )
+        .await,
+        Message::Status { revision: 2, .. }
+    ));
+    assert_eq!(named("sinks", "litz.speaker"), 1);
+    assert!(matches!(
+        rpc(
+            &mut control,
+            10,
+            Message::ApplySettings {
+                expected_revision: 2,
+                route: Route::Mirror {
+                    name: Some("litz.microphone_sink".into())
+                },
+            }
+        )
+        .await,
+        Message::Error {
+            code: Code::RouteConflict
+        }
+    ));
+    let chosen = Route::Mirror {
+        name: Some("test.a".into()),
+    };
+    assert!(matches!(
+        rpc(
+            &mut control,
+            11,
+            Message::ApplySettings {
+                expected_revision: 2,
+                route: chosen.clone(),
+            }
+        )
+        .await,
+        Message::Status { revision: 3, .. }
+    ));
+    assert_eq!(named("sinks", "litz.speaker"), 0);
+    let Message::Capabilities {
+        desktop: Some(desktop),
+    } = rpc(&mut control, 12, capabilities()).await
+    else {
+        panic!("missing routes")
+    };
+    assert_eq!(desktop.effective, Some(chosen));
+    assert_eq!(desktop.resolved.as_deref(), Some("test.a"));
+
+    connection.close(0u8.into(), b"test complete");
+    let daemon = &mut fixture.children[agent.daemon];
+    assert!(
+        Command::new("kill")
+            .arg(daemon.id().to_string())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while daemon.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "litzd ignored SIGTERM");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !pactl(&["list", "short", "modules"]).contains("litz."),
+        "litzd left its devices behind"
+    );
 }

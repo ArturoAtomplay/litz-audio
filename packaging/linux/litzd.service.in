@@ -1,6 +1,6 @@
 [Unit]
 Description=Litz Audio microphone
-After=pipewire.service
+After=pipewire.service pulseaudio.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

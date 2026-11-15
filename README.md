@@ -21,7 +21,7 @@ Litz is early software. Expect rough edges, especially on Windows.
 
 ## Install
 
-**Linux** (PipeWire 1.0 or newer):
+**Linux** (PipeWire 1.0 or newer, or PulseAudio):
 
 ```sh
 curl -fsSL https://github.com/ArturoAtomplay/litz-audio/releases/latest/download/install.sh | sh
@@ -53,7 +53,7 @@ When a phone pairs, both screens show the same six-digit code; allow it only if 
 
 ## Building
 
-You need Rust (version pinned in `rust-toolchain.toml`), and on Linux the PipeWire headers, `pkg-config` and `libclang`. With Nix, `nix develop` provides everything.
+You need Rust (version pinned in `rust-toolchain.toml`), and on Linux the PipeWire and PulseAudio headers, `pkg-config` and `libclang`. With Nix, `nix develop` provides everything.
 
 ```sh
 packaging/fetch-model.sh target/model    # DeepFilterNet model, for tests
