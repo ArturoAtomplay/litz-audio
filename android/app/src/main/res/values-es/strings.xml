@@ -93,7 +93,7 @@
     <string name="source_standard">Micrófono estándar</string>
     <string name="source_standard_description">Modo de grabación general</string>
     <string name="source_calls">Llamadas y reuniones</string>
-    <string name="source_calls_description">Optimizado para llamadas de voz</string>
+    <string name="source_calls_description">Ajustado para llamadas: usa la cancelación de eco y el control de ganancia del teléfono si están disponibles</string>
     <string name="source_speech">Reconocimiento de voz</string>
     <string name="source_speech_description">Prioriza una voz clara</string>
     <string name="source_performance">Actuación en vivo</string>

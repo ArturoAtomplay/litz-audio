@@ -47,6 +47,8 @@ That's it; the phone reconnects on its own from then on. In your calling app, pi
 
 If the phone can't find the computer, use **Pair by IP address**, and make sure your firewall allows UDP port 47165 and mDNS (UDP 5353). USB tethering works too.
 
+With the microphone on, the computer also hears whatever the phone's own speaker plays. Headphones avoid that with no loss in quality. Without them, the **Calls and meetings** recording mode in Settings uses the phone's own echo cancellation when it has one; Android then processes your voice as it does in a call.
+
 When a phone pairs, both screens show the same six-digit code; allow it only if they match. To see or remove paired phones on the computer, run `litzd devices` or `litzd forget NAME`. On Windows, run them from the install folder (`%LOCALAPPDATA%\Programs\Litz Audio`); the output appears after the prompt returns.
 
 ## Building

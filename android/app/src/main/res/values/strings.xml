@@ -96,7 +96,7 @@
     <string name="source_standard">Standard microphone</string>
     <string name="source_standard_description">General recording mode</string>
     <string name="source_calls">Calls and meetings</string>
-    <string name="source_calls_description">Optimized for voice calls</string>
+    <string name="source_calls_description">Tuned for calls: uses the phone\'s echo cancellation and gain control when available</string>
     <string name="source_speech">Speech recognition</string>
     <string name="source_speech_description">Prioritizes clear speech</string>
     <string name="source_performance">Live performance</string>
