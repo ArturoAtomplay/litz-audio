@@ -11,8 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 use wasapi::{
-    AudioClient, AudioRenderClient, DeviceEnumerator, Direction, Handle, SampleType, StreamMode,
-    WaveFormat,
+    AudioClient, AudioRenderClient, DeviceEnumerator, DeviceEventCallbacks, Direction, Handle,
+    Role, SampleType, StreamMode, WaveFormat,
 };
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -77,23 +77,59 @@ unsafe impl<T> Send for Opened<T> {}
 
 type Permit = tokio::sync::OwnedSemaphorePermit;
 
+pub enum DeviceWork {
+    Command(CaptureCommand),
+    Reopen,
+    Closed,
+}
+
+struct Commands(mpsc::Sender<DeviceWork>);
+impl Drop for Commands {
+    fn drop(&mut self) {
+        let _ = self.0.send(DeviceWork::Closed);
+    }
+}
+
+/// The network's handle on the device thread. Notifications also queue
+/// work there, so the thread stops when the last of these handles is dropped,
+/// not when its channel disconnects.
+#[derive(Clone)]
+pub struct CommandSender(Arc<Commands>);
+impl CommandSender {
+    pub fn channel() -> (Self, mpsc::Receiver<DeviceWork>) {
+        let (sender, work) = mpsc::channel();
+        (Self(Arc::new(Commands(sender))), work)
+    }
+    pub fn send(
+        &self,
+        command: CaptureCommand,
+    ) -> std::result::Result<(), mpsc::SendError<DeviceWork>> {
+        self.0.0.send(DeviceWork::Command(command))
+    }
+    fn notifier(&self) -> mpsc::Sender<DeviceWork> {
+        self.0.0.clone()
+    }
+}
+
 /// What is left for the audio thread once the slow COM work is done.
 enum Ready {
     Active(bool, tokio::sync::oneshot::Sender<bool>, Permit),
     Route(
         Option<Opened<Box<Capture>>>,
+        bool,
         tokio::sync::oneshot::Sender<Option<CaptureRoute>>,
         Permit,
     ),
     Render(Opened<Render>),
-    DefaultMoved,
+    Moved(Option<Opened<Box<Capture>>>),
 }
 
 /// Enumerates and opens devices, which can take far longer than an audio
 /// period, so the audio thread never does. `route` and `capture` describe what
 /// the audio thread currently captures.
 fn serve_devices(
-    operations: mpsc::Receiver<CaptureCommand>,
+    work: mpsc::Receiver<DeviceWork>,
+    notify: mpsc::Sender<DeviceWork>,
     ready: mpsc::SyncSender<Ready>,
     mic_available: Arc<AtomicBool>,
     mut route: Route,
@@ -103,17 +139,32 @@ fn serve_devices(
         return;
     }
     let _com = Com;
+    let mut callbacks = DeviceEventCallbacks::new();
+    callbacks.set_default_device_callback(move |direction, role, _| {
+        if direction == Direction::Render && role == Role::Console {
+            let _ = notify.send(DeviceWork::Reopen);
+        }
+    });
+    let _registration = DeviceEnumerator::new()
+        .and_then(|devices| devices.register_notification_callback(callbacks))
+        .ok();
+    let reopen = |route: &Route, capture: &mut Option<String>| {
+        let opened = Capture::open(route).ok();
+        *capture = opened.as_ref().map(|c| c.id.clone());
+        Ready::Moved(opened.map(Box::new).map(Opened))
+    };
     let mut checked = Instant::now();
     loop {
-        let next = match operations.recv_timeout(Duration::from_millis(250)) {
-            Ok((CaptureOperation::Inventory(reply), _permit)) => {
+        let follow = matches!(route, Route::Mirror { name: None });
+        let next = match work.recv_timeout(Duration::from_millis(250)) {
+            Ok(DeviceWork::Command((CaptureOperation::Inventory(reply), _permit))) => {
                 let _ = reply.send(capture::outputs().unwrap_or_default());
                 None
             }
-            Ok((CaptureOperation::Active(active, reply), permit)) => {
+            Ok(DeviceWork::Command((CaptureOperation::Active(active, reply), permit))) => {
                 Some(Ready::Active(active, reply, permit))
             }
-            Ok((CaptureOperation::Route(request, reply), permit)) => {
+            Ok(DeviceWork::Command((CaptureOperation::Route(request, reply), permit))) => {
                 let opened = Capture::open(&request).ok();
                 if let Some(opened) = &opened {
                     capture = Some(opened.id.clone());
@@ -121,12 +172,15 @@ fn serve_devices(
                 }
                 Some(Ready::Route(
                     opened.map(Box::new).map(Opened),
+                    matches!(route, Route::Mirror { name: None }),
                     reply,
                     permit,
                 ))
             }
+            Ok(DeviceWork::Reopen) if follow => Some(reopen(&route, &mut capture)),
+            Ok(DeviceWork::Reopen) => None,
             Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Ok(DeviceWork::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
         if let Some(next) = next
             && ready.send(next).is_err()
@@ -148,7 +202,7 @@ fn serve_devices(
                 .ok()
                 .and_then(|device| device.get_id().ok())
                 != capture
-            && ready.send(Ready::DefaultMoved).is_err()
+            && ready.send(reopen(&route, &mut capture)).is_err()
         {
             return;
         }
@@ -182,12 +236,17 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     let reset = Arc::new(AtomicBool::new(true));
     let mic_available = Arc::new(AtomicBool::new(render.is_some()));
     let mut fault = Arc::new(AtomicBool::new(false));
+    let mut follow = matches!(route, Route::Mirror { name: None });
+    let mut listening = false;
     let (mic, mut consumer) = pcm::channel();
     let (mut captured, samples) = rtrb::RingBuffer::new(crate::audio::CAPACITY);
     let (mut demand, requests) = rtrb::RingBuffer::new(8);
-    let (commands, operations) = mpsc::sync_channel(1);
+    let (commands, work) = CommandSender::channel();
+    let notify = commands.notifier();
+    let reopen = commands.notifier();
     let effective = Some(route.clone());
-    let resolved = capture.as_ref().map(|c| c.id.clone());
+    let (mut resolved, output) =
+        tokio::sync::watch::channel(capture.as_ref().map(|c| c.id.clone()));
     let _network = crate::server::start(Ports {
         mic,
         mic_available: mic_available.clone(),
@@ -197,7 +256,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         wake: wake.clone(),
         reset: reset.clone(),
         route: effective,
-        resolved,
+        resolved: Some(output),
         revision: saved.revision,
         voice: saved.voice,
         commands,
@@ -209,7 +268,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         let capture = capture.as_ref().map(|c| c.id.clone());
         std::thread::Builder::new()
             .name("litz-devices".into())
-            .spawn(move || serve_devices(operations, prepared, mic_available, route, capture))?
+            .spawn(move || serve_devices(work, notify, prepared, mic_available, route, capture))?
     };
     let mut mono = [0u8; pcm::CAPACITY * 4];
     let mut stereo = [0u8; pcm::CAPACITY * 8];
@@ -217,22 +276,27 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         if let Ok(ready) = ready.try_recv() {
             match ready {
                 Ready::Active(active, reply, _permit) => {
-                    let ok = capture
-                        .as_mut()
-                        .is_some_and(|c| c.set_active(active).is_ok());
+                    let ok = match &mut capture {
+                        Some(c) => c.set_active(active).is_ok(),
+                        None => follow,
+                    };
+                    listening = active && ok;
                     let _ = reply.send(ok);
                 }
-                Ready::Route(opened, reply, _permit) => {
+                Ready::Route(opened, follows, reply, _permit) => {
                     let result = opened.map(|Opened(next)| {
                         let (producer, samples) = rtrb::RingBuffer::new(crate::audio::CAPACITY);
                         captured = producer;
                         fault = Arc::new(AtomicBool::new(false));
-                        let resolved = Some(next.id.clone());
+                        follow = follows;
+                        listening = false;
+                        let output;
+                        (resolved, output) = tokio::sync::watch::channel(Some(next.id.clone()));
                         capture = Some(*next);
                         CaptureRoute {
                             samples,
                             fault: fault.clone(),
-                            resolved,
+                            resolved: output,
                         }
                     });
                     let _ = reply.send(result);
@@ -241,21 +305,31 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
                     render = Some(next);
                     mic_available.store(true, Ordering::Release);
                 }
-                Ready::DefaultMoved => {
-                    if let Some(current) = &mut capture {
-                        let _ = current.set_active(false);
+                Ready::Moved(next) => {
+                    capture = next.map(|Opened(next)| *next);
+                    if listening
+                        && let Some(c) = &mut capture
+                        && c.set_active(true).is_err()
+                    {
+                        capture = None;
                     }
-                    fault.store(true, Ordering::Release);
-                    wake.signal();
+                    resolved.send_replace(capture.as_ref().map(|c| c.id.clone()));
                 }
             }
         }
         if let Some(c) = &mut capture
-            && let Err(error) = c.drain(&mut captured, &fault)
+            && let Err(error) = c.drain(&mut captured)
         {
             eprintln!("litzd: {error}");
-            fault.store(true, Ordering::Release);
-            let _ = c.set_active(false);
+            if follow {
+                capture = None;
+                resolved.send_replace(None);
+                let _ = reopen.send(DeviceWork::Reopen);
+            } else {
+                let _ = c.set_active(false);
+                fault.store(true, Ordering::Release);
+                wake.signal();
+            }
         }
         if let Some(r) = &render {
             let result = (|| -> Result<()> {
@@ -319,11 +393,13 @@ mod tests {
 
     #[test]
     fn outputs_are_listed_and_routes_opened_without_the_audio_thread() {
-        let (commands, operations) = mpsc::sync_channel(1);
+        let (commands, work) = CommandSender::channel();
+        let notify = commands.notifier();
         let (prepared, ready) = mpsc::sync_channel(4);
         let devices = std::thread::spawn(move || {
             serve_devices(
-                operations,
+                work,
+                notify,
                 prepared,
                 Arc::new(AtomicBool::new(true)),
                 Route::PhoneOnly,

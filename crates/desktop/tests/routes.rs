@@ -131,13 +131,23 @@ fn capabilities() -> Message {
     Message::Capabilities { desktop: None }
 }
 
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "requires pipewire executable; run in nix develop"]
-async fn live_routes_are_revision_checked_and_do_not_restart_the_agent() {
+struct Agent {
+    fixture: Fixture,
+    daemon: usize,
+    endpoint: quinn::Endpoint,
+    address: std::net::SocketAddr,
+    cert: Vec<u8>,
+    directory: std::path::PathBuf,
+    state: std::path::PathBuf,
+}
+
+/// Starts a private PipeWire, optionally WirePlumber, and the agent, and pairs
+/// one phone with it.
+async fn start(name: &str, pipewire: &str, wireplumber: bool) -> Agent {
     let mut nonce = [0; 8];
     getrandom::fill(&mut nonce).unwrap();
     let directory =
-        std::env::temp_dir().join(format!("litz-routes-{:016x}", u64::from_ne_bytes(nonce)));
+        std::env::temp_dir().join(format!("litz-{name}-{:016x}", u64::from_ne_bytes(nonce)));
     fs::create_dir(&directory).unwrap();
     let mut fixture = Fixture {
         children: vec![],
@@ -146,22 +156,7 @@ async fn live_routes_are_revision_checked_and_do_not_restart_the_agent() {
         directory: directory.clone(),
     };
     let config = directory.join("pipewire.conf");
-    fs::write(&config, r#"
-context.properties = { core.daemon = true core.name = pipewire-0 }
-context.spa-libs = { support.* = support/libspa-support audio.convert.* = audioconvert/libspa-audioconvert }
-context.modules = [
- { name = libpipewire-module-protocol-native }
- { name = libpipewire-module-client-node }
- { name = libpipewire-module-adapter }
- { name = libpipewire-module-metadata }
- { name = libpipewire-module-access args = { access.force = unrestricted } }
-]
-context.objects = [
- { factory = metadata args = { metadata.name = default } }
- { factory = adapter args = { factory.name = support.null-audio-sink node.name = test.output.two node.description = "Second physical output" media.class = Audio/Sink audio.position = [ FL FR ] device.id = 2 node.virtual = false } }
- { factory = adapter args = { factory.name = support.null-audio-sink node.name = test.output node.description = "Test physical output" media.class = Audio/Sink audio.position = [ FL FR ] device.id = 1 node.virtual = false } }
-]
-"#).unwrap();
+    fs::write(&config, pipewire).unwrap();
     fixture.children.push(
         Command::new("pipewire")
             .args(["-c", config.to_str().unwrap()])
@@ -176,6 +171,22 @@ context.objects = [
     while !directory.join("pipewire-0").exists() {
         assert!(Instant::now() < deadline, "private PipeWire did not start");
         tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    if wireplumber {
+        fixture.children.push(
+            Command::new("wireplumber")
+                .args(["-p", "policy"])
+                .env("XDG_RUNTIME_DIR", &directory)
+                .env("PIPEWIRE_RUNTIME_DIR", &directory)
+                .env("XDG_STATE_HOME", &directory)
+                .env("XDG_CONFIG_HOME", &directory)
+                .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        tokio::time::sleep(Duration::from_millis(1500)).await;
     }
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
@@ -214,8 +225,11 @@ context.objects = [
             .spawn()
             .unwrap(),
     );
-    fixture.daemon_input = fixture.children[1].stdin.take();
-    fixture.prompts = Some(watch_prompts(fixture.children[1].stderr.take().unwrap()));
+    let daemon = fixture.children.len() - 1;
+    fixture.daemon_input = fixture.children[daemon].stdin.take();
+    fixture.prompts = Some(watch_prompts(
+        fixture.children[daemon].stderr.take().unwrap(),
+    ));
     let mut endpoint = transport::client_endpoint("127.0.0.1:0".parse().unwrap()).unwrap();
     endpoint.set_default_client_config(
         transport::client(
@@ -234,6 +248,46 @@ context.objects = [
     .unwrap()
     .unwrap();
     enroll(&pairing_connection, &mut fixture).await;
+    Agent {
+        fixture,
+        daemon,
+        endpoint,
+        address,
+        cert,
+        directory,
+        state,
+    }
+}
+
+const ROUTES: &str = r#"
+context.properties = { core.daemon = true core.name = pipewire-0 }
+context.spa-libs = { support.* = support/libspa-support audio.convert.* = audioconvert/libspa-audioconvert }
+context.modules = [
+ { name = libpipewire-module-protocol-native }
+ { name = libpipewire-module-client-node }
+ { name = libpipewire-module-adapter }
+ { name = libpipewire-module-metadata }
+ { name = libpipewire-module-access args = { access.force = unrestricted } }
+]
+context.objects = [
+ { factory = metadata args = { metadata.name = default } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = test.output.two node.description = "Second physical output" media.class = Audio/Sink audio.position = [ FL FR ] device.id = 2 node.virtual = false } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = test.output node.description = "Test physical output" media.class = Audio/Sink audio.position = [ FL FR ] device.id = 1 node.virtual = false } }
+]
+"#;
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires pipewire executable; run in nix develop"]
+async fn live_routes_are_revision_checked_and_do_not_restart_the_agent() {
+    let Agent {
+        mut fixture,
+        daemon,
+        endpoint,
+        address,
+        cert,
+        directory,
+        state,
+    } = start("routes", ROUTES, false).await;
     let cli_directory = fixture.directory.clone();
     let litzd = move |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_litzd"))
@@ -378,7 +432,7 @@ context.objects = [
         matches!(rpc(&mut control, 13, Message::Stop { stream: Stream::Playback }).await, Message::Status { running: [Some(config),None], .. } if config == mic)
     );
     assert!(
-        fixture.children[1].try_wait().unwrap().is_none(),
+        fixture.children[daemon].try_wait().unwrap().is_none(),
         "agent exited during routing"
     );
     let persisted: serde_json::Value =
@@ -648,5 +702,213 @@ context.objects = [
         .unwrap();
     let devices = litzd(&["devices"]);
     assert!(String::from_utf8_lossy(&devices.stdout).contains("No phones are paired"));
+    connection.close(0u8.into(), b"test complete");
+}
+
+const SESSION: &str = r#"
+context.properties = { core.daemon = true core.name = pipewire-0 }
+context.spa-libs = { support.* = support/libspa-support audio.convert.* = audioconvert/libspa-audioconvert }
+context.modules = [
+ { name = libpipewire-module-protocol-native }
+ { name = libpipewire-module-metadata }
+ { name = libpipewire-module-spa-node-factory }
+ { name = libpipewire-module-client-node }
+ { name = libpipewire-module-client-device }
+ { name = libpipewire-module-access args = { access.force = unrestricted } }
+ { name = libpipewire-module-adapter }
+ { name = libpipewire-module-link-factory }
+ { name = libpipewire-module-session-manager }
+]
+context.objects = [
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = test.a media.class = Audio/Sink audio.position = [ FL FR ] device.id = 1 priority.session = 1000 } }
+ { factory = adapter args = { factory.name = support.null-audio-sink node.name = test.b media.class = Audio/Sink audio.position = [ FL FR ] device.id = 2 priority.session = 900 } }
+]
+"#;
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires pipewire and wireplumber executables; run in nix develop"]
+async fn the_default_output_is_followed_without_reopening_the_capture() {
+    let agent = start("follow", SESSION, true).await;
+    let directory = agent.directory.clone();
+    let tool = |program: &str, args: &[&str]| {
+        assert!(
+            Command::new(program)
+                .args(args)
+                .env("XDG_RUNTIME_DIR", &directory)
+                .env("PIPEWIRE_RUNTIME_DIR", &directory)
+                .stdout(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    let connection = agent
+        .endpoint
+        .connect(agent.address, "litz.local")
+        .unwrap()
+        .await
+        .unwrap();
+    let mut control = Control::new(connection.open_bi().await.unwrap());
+    rpc(&mut control, 1, Message::GetState {}).await;
+    rpc(
+        &mut control,
+        2,
+        Message::Acquire {
+            expected_generation: None,
+        },
+    )
+    .await;
+    let Message::Capabilities {
+        desktop: Some(desktop),
+    } = rpc(&mut control, 3, capabilities()).await
+    else {
+        panic!("missing routes")
+    };
+    assert_eq!(desktop.effective, Some(Route::Mirror { name: None }));
+    assert_eq!(desktop.resolved.as_deref(), Some("test.a"));
+    let playback = Config {
+        stream: Stream::Playback,
+        epoch: 1,
+    };
+    assert!(matches!(
+        rpc(&mut control, 4, Message::Start(playback)).await,
+        Message::Status {
+            running: [None, Some(_)],
+            ..
+        }
+    ));
+    let mut player = Command::new("pw-cat")
+        .args([
+            "-p",
+            "--raw",
+            "--format",
+            "f32",
+            "-P",
+            "{ node.linger = true }",
+            "-",
+        ])
+        .env("XDG_RUNTIME_DIR", &directory)
+        .env("PIPEWIRE_RUNTIME_DIR", &directory)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut tone = player.stdin.take().unwrap();
+    std::thread::spawn(move || {
+        let frame: Vec<u8> = (0..480)
+            .flat_map(|_| [0.25f32.to_ne_bytes(), 0.25f32.to_ne_bytes()].concat())
+            .collect();
+        while tone.write_all(&frame).is_ok() {}
+    });
+    let mut fixture = agent.fixture;
+    fixture.children.push(player);
+
+    // Waits for the agent to advertise `resolved`, then returns the longest
+    // pause between captured packets around that change.
+    async fn followed(
+        connection: &quinn::Connection,
+        control: &mut Control,
+        resolved: Option<&str>,
+    ) -> Duration {
+        let mut last = Instant::now();
+        let mut longest = Duration::ZERO;
+        let mut reported = false;
+        let mut settle = None;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => panic!("{resolved:?} was not followed"),
+                _ = async { tokio::time::sleep_until(settle.unwrap()).await }, if settle.is_some() => {
+                    return longest;
+                }
+                record = control.read() => {
+                    let record = record.unwrap();
+                    assert_eq!(record.request_id, 0);
+                    let Message::Capabilities { desktop: Some(desktop) } = record.message else {
+                        panic!("following the default output stopped listening: {:?}", record.message);
+                    };
+                    assert_eq!(desktop.effective, Some(Route::Mirror { name: None }));
+                    if desktop.resolved.as_deref() == resolved {
+                        reported = true;
+                        settle = Some(tokio::time::Instant::now() + Duration::from_millis(500));
+                    }
+                }
+                datagram = connection.read_datagram() => {
+                    datagram.unwrap();
+                    if reported || settle.is_none() {
+                        longest = longest.max(last.elapsed());
+                    }
+                    last = Instant::now();
+                }
+            }
+        }
+    }
+    let mut audio = Duration::ZERO;
+    connection.read_datagram().await.unwrap();
+    let mut last = Instant::now();
+    let listened = Instant::now();
+    while listened.elapsed() < Duration::from_secs(1) {
+        connection.read_datagram().await.unwrap();
+        audio = audio.max(last.elapsed());
+        last = Instant::now();
+    }
+    assert!(
+        audio < Duration::from_millis(60),
+        "no steady audio: {audio:?}"
+    );
+    let switch = |name: &str| {
+        let value = serde_json::json!({ "name": name }).to_string();
+        tool(
+            "pw-metadata",
+            &[
+                "-n",
+                "default",
+                "0",
+                "default.configured.audio.sink",
+                &value,
+                "Spa:String:JSON",
+            ],
+        );
+    };
+    let sink = |name: &str| {
+        let props = format!(
+            "{{ factory.name = support.null-audio-sink node.name = {name} media.class = Audio/Sink audio.position = [ FL FR ] object.linger = true priority.session = 2000 }}"
+        );
+        tool("pw-cli", &["create-node", "adapter", &props]);
+    };
+    switch("test.b");
+    let gap = followed(&connection, &mut control, Some("test.b")).await;
+    assert!(
+        gap < Duration::from_millis(150),
+        "switching paused audio {gap:?}"
+    );
+    tool("pw-cli", &["destroy", "test.b"]);
+    let gap = followed(&connection, &mut control, Some("test.a")).await;
+    assert!(
+        gap < Duration::from_millis(150),
+        "removal paused audio {gap:?}"
+    );
+    sink("test.c");
+    let gap = followed(&connection, &mut control, Some("test.c")).await;
+    assert!(
+        gap < Duration::from_millis(150),
+        "a new output paused audio {gap:?}"
+    );
+    tool("pw-cli", &["destroy", "test.c"]);
+    followed(&connection, &mut control, Some("test.a")).await;
+    tool("pw-cli", &["destroy", "test.a"]);
+    followed(&connection, &mut control, None).await;
+    sink("test.d");
+    followed(&connection, &mut control, Some("test.d")).await;
+    assert!(matches!(
+        rpc(&mut control, 5, Message::GetState {}).await,
+        Message::Status {
+            running: [None, Some(config)],
+            ..
+        } if config == playback
+    ));
+    assert!(
+        fixture.children[agent.daemon].try_wait().unwrap().is_none(),
+        "agent exited while following the default output"
+    );
     connection.close(0u8.into(), b"test complete");
 }

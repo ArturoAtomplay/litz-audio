@@ -102,7 +102,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
         .as_ref()
         .map(|c| c.fault.clone())
         .unwrap_or_default();
-    let resolved = capture.as_ref().and_then(|c| c.resolved.clone());
+    let resolved = capture.as_ref().map(|c| c.resolved.subscribe());
     let effective = route.cloned();
     let route_core = core.clone();
     let route_loop = mainloop.clone();
@@ -131,7 +131,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
                             let result = crate::server::CaptureRoute {
                                 samples: next.samples.take().unwrap(),
                                 fault: next.fault.clone(),
-                                resolved: next.resolved.clone(),
+                                resolved: next.resolved.subscribe(),
                             };
                             *capture.borrow_mut() = Some(next);
                             result

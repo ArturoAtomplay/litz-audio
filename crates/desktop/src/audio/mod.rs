@@ -14,7 +14,7 @@ pub mod wasapi;
 #[cfg(target_os = "linux")]
 pub type CommandSender = ::pipewire::channel::Sender<crate::server::CaptureCommand>;
 #[cfg(windows)]
-pub type CommandSender = std::sync::mpsc::SyncSender<crate::server::CaptureCommand>;
+pub type CommandSender = wasapi::CommandSender;
 
 #[cfg(target_os = "linux")]
 pub use pipewire::run;

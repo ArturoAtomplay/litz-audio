@@ -43,10 +43,11 @@ pub enum CaptureOperation {
     Inventory(oneshot::Sender<Vec<Endpoint>>),
     Route(Route, oneshot::Sender<Option<CaptureRoute>>),
 }
+pub type Resolved = tokio::sync::watch::Receiver<Option<String>>;
 pub struct CaptureRoute {
     pub samples: rtrb::Consumer<crate::audio::Captured>,
     pub fault: Arc<AtomicBool>,
-    pub resolved: Option<String>,
+    pub resolved: Resolved,
 }
 pub type CaptureCommand = (CaptureOperation, tokio::sync::OwnedSemaphorePermit);
 pub struct Ports {
@@ -58,11 +59,16 @@ pub struct Ports {
     pub wake: Wake,
     pub reset: Arc<AtomicBool>,
     pub route: Option<Route>,
-    pub resolved: Option<String>,
+    pub resolved: Option<Resolved>,
     pub revision: u64,
     pub voice: VoiceSettings,
     pub commands: crate::audio::CommandSender,
     pub command_slots: Arc<tokio::sync::Semaphore>,
+}
+impl Ports {
+    pub fn output(&self) -> Option<String> {
+        self.resolved.as_ref().and_then(|r| r.borrow().clone())
+    }
 }
 pub struct Network {
     stop: Option<oneshot::Sender<()>>,
@@ -412,7 +418,7 @@ fn command<T: Send + 'static>(
     })
 }
 
-pub fn set_capture_active(ports: &Ports, active: bool) -> Pending<()> {
+fn set_capture_active(ports: &Ports, active: bool) -> Pending<()> {
     let applied = command(
         ports,
         move |tx| CaptureOperation::Active(active, tx),
@@ -449,7 +455,7 @@ pub fn routes(ports: &Ports, endpoints: Vec<Endpoint>) -> DesktopRoutes {
         name: computer_name(),
         endpoints,
         effective: ports.route.clone(),
-        resolved: ports.resolved.clone(),
+        resolved: ports.output(),
         revision: ports.revision,
         voice: ports.voice,
         suppression_algorithms: available_suppression(),
@@ -468,7 +474,7 @@ pub fn open_capture(ports: &Ports, route: Route) -> Pending<Option<CaptureRoute>
 pub fn install_capture(ports: &mut Ports, route: Route, next: CaptureRoute) {
     ports.capture = Some(next.samples);
     ports.capture_fault = next.fault;
-    ports.resolved = next.resolved;
+    ports.resolved = Some(next.resolved);
     ports.route = Some(route);
 }
 
@@ -481,7 +487,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         let commands = pipewire::channel::channel().0;
         #[cfg(windows)]
-        let commands = std::sync::mpsc::sync_channel(1).0;
+        let commands = crate::audio::CommandSender::channel().0;
         Ok(Ports {
             mic: litz_core::pcm::channel().0,
             mic_available: Arc::default(),

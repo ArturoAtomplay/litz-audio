@@ -1,17 +1,9 @@
 use litz_core::protocol::{Endpoint, Route};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Instant,
-};
+use std::time::Instant;
 use wasapi::{
     AudioClient, Device, DeviceEnumerator, Direction, Handle, SampleType, StreamMode, WaveFormat,
 };
-use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, IAudioCaptureClient,
-};
+use windows::Win32::Media::Audio::{AUDCLNT_BUFFERFLAGS_SILENT, IAudioCaptureClient};
 
 use crate::audio::{CAPACITY, Captured};
 
@@ -61,7 +53,6 @@ pub struct Capture {
     pub id: String,
     pub active: bool,
     bytes: [u8; CAPACITY * 8],
-    first: bool,
 }
 impl Capture {
     pub fn open(route: &Route) -> Result<Self> {
@@ -91,14 +82,12 @@ impl Capture {
             id,
             active: false,
             bytes: [0; CAPACITY * 8],
-            first: true,
         })
     }
     pub fn set_active(&mut self, active: bool) -> Result<()> {
         if active != self.active {
             if active {
                 self.client.start_stream()?;
-                self.first = true;
             } else {
                 self.client.stop_stream()?;
                 self.client.reset_stream()?;
@@ -107,11 +96,7 @@ impl Capture {
         }
         Ok(())
     }
-    pub fn drain(
-        &mut self,
-        output: &mut rtrb::Producer<Captured>,
-        fault: &Arc<AtomicBool>,
-    ) -> Result<()> {
+    pub fn drain(&mut self, output: &mut rtrb::Producer<Captured>) -> Result<()> {
         if !self.active {
             return Ok(());
         }
@@ -150,10 +135,6 @@ impl Capture {
                     return Err("Oversized WASAPI packet".into());
                 }
             }
-            if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 && !self.first {
-                return Err("WASAPI capture discontinuity".into());
-            }
-            self.first = false;
             let at = Instant::now();
             for bytes in self.bytes[..frames as usize * 8].as_chunks::<8>().0 {
                 let samples = [
@@ -161,8 +142,7 @@ impl Capture {
                     f32::from_le_bytes(bytes[4..].try_into().unwrap()),
                 ];
                 if output.push(Captured::new(samples, at)).is_err() {
-                    fault.store(true, Ordering::Release);
-                    return Err("WASAPI capture overflow".into());
+                    return Ok(());
                 }
             }
         }

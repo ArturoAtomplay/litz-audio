@@ -27,7 +27,7 @@ pub struct Capture {
     pub stream: pw::stream::StreamRc,
     pub samples: Option<rtrb::Consumer<Captured>>,
     pub fault: Arc<AtomicBool>,
-    pub resolved: Option<String>,
+    pub resolved: tokio::sync::watch::Sender<Option<String>>,
 }
 impl Drop for Capture {
     fn drop(&mut self) {
@@ -38,8 +38,17 @@ impl Drop for Capture {
 #[derive(Default)]
 struct Devices {
     physical: BTreeMap<u32, String>,
+    sinks: BTreeMap<u32, String>,
     default: Option<String>,
     selected: Option<u32>,
+}
+impl Devices {
+    /// The sink WirePlumber links a stream without a target to.
+    fn followed(&self) -> Option<String> {
+        self.default
+            .clone()
+            .filter(|name| self.sinks.values().any(|sink| sink == name))
+    }
 }
 fn physical(props: &spa::utils::dict::DictRef) -> bool {
     props.get("media.class") == Some("Audio/Sink")
@@ -121,16 +130,28 @@ pub fn open(
     let registry = core.get_registry_rc()?;
     let devices = Rc::new(RefCell::new(Devices::default()));
     let metadata = Rc::new(RefCell::new(Vec::new()));
+    let (resolved, _) = tokio::sync::watch::channel(None);
+    let publish = {
+        let resolved = resolved.clone();
+        move |devices: &Devices| {
+            let followed = devices.followed();
+            resolved.send_if_modified(|current| {
+                let changed = *current != followed;
+                *current = followed;
+                changed
+            });
+        }
+    };
+    let follow = matches!(route, Route::Mirror { name: None });
     let reg_devices = devices.clone();
     let reg_metadata = metadata.clone();
+    let reg_publish = publish.clone();
     let core_clone = core.clone();
     let remove_devices = devices.clone();
+    let remove_publish = publish.clone();
     let fault = Arc::new(AtomicBool::new(false));
-    let default_fault = fault.clone();
     let remove_fault = fault.clone();
-    let default_wake = wake.clone();
     let remove_wake = wake.clone();
-    let follow = matches!(route, Route::Mirror { name: None });
     let registry_listener = registry
         .add_listener_local()
         .global(move |global| {
@@ -138,12 +159,17 @@ pub fn open(
                 return;
             };
             if global.type_ == pw::types::ObjectType::Node
-                && physical(props)
                 && let Some(name) = props.get("node.name")
             {
                 let mut d = reg_devices.borrow_mut();
-                if d.physical.len() < 256 {
+                if physical(props) && d.physical.len() < 256 {
                     d.physical.insert(global.id, name.to_owned());
+                }
+                if props.get("media.class") == Some("Audio/Sink") && d.sinks.len() < 256 {
+                    d.sinks.insert(global.id, name.to_owned());
+                    if follow {
+                        reg_publish(&d);
+                    }
                 }
             }
             if follow
@@ -160,8 +186,7 @@ pub fn open(
                     return;
                 };
                 let devices = reg_devices.clone();
-                let fault = default_fault.clone();
-                let wake = default_wake.clone();
+                let publish = reg_publish.clone();
                 let listener = meta
                     .add_listener_local()
                     .property(move |subject, key, _, value| {
@@ -170,15 +195,11 @@ pub fn open(
                             struct DefaultNode {
                                 name: String,
                             }
-                            let name = value
+                            let mut d = devices.borrow_mut();
+                            d.default = value
                                 .and_then(|v| serde_json::from_str::<DefaultNode>(v).ok())
                                 .map(|v| v.name);
-                            let mut d = devices.borrow_mut();
-                            if d.default != name && d.selected.is_some() {
-                                fault.store(true, Ordering::Release);
-                                wake.signal();
-                            }
-                            d.default = name;
+                            publish(&d);
                         }
                         0
                     })
@@ -189,6 +210,9 @@ pub fn open(
         .global_remove(move |id| {
             let mut d = remove_devices.borrow_mut();
             d.physical.remove(&id);
+            if d.sinks.remove(&id).is_some() && follow {
+                remove_publish(&d);
+            }
             if d.selected == Some(id) {
                 remove_fault.store(true, Ordering::Release);
                 remove_wake.signal();
@@ -197,45 +221,47 @@ pub fn open(
         .register();
     roundtrip(core, mainloop)?;
     roundtrip(core, mainloop)?;
-    let target = match route {
-        Route::PhoneOnly => None,
-        Route::Mirror { name } => {
-            let d = devices.borrow();
-            let name = name
-                .as_ref()
-                .or(d.default.as_ref())
-                .ok_or("no physical default sink")?;
+    let mut props = properties! {
+        "node.name" => "litz.capture", "media.type" => "Audio", "media.category" => "Capture",
+        "media.role" => "Music", "audio.channels" => "2", "audio.position" => "[ FL FR ]",
+        "node.latency" => "512/48000", "node.pause-on-idle" => "true",
+    };
+    match route {
+        Route::PhoneOnly => {
+            props.insert("node.name", "litz.speaker");
+            props.insert("node.description", "Litz Phone Speaker");
+            props.insert("media.class", "Audio/Sink");
+            props.insert("media.category", "Playback");
+            props.insert("node.virtual", "true");
+            props.insert("node.autoconnect", "false");
+        }
+        // WirePlumber links a stream without a target to the default sink,
+        // moves it when the default changes, and with node.linger waits for
+        // a sink instead of failing the stream while there is none.
+        Route::Mirror { name: None } => {
+            props.insert("stream.capture.sink", "true");
+            props.insert("node.autoconnect", "true");
+            props.insert("node.linger", "true");
+        }
+        Route::Mirror { name: Some(name) } => {
+            let mut d = devices.borrow_mut();
             let id = d
                 .physical
                 .iter()
                 .find(|(_, n)| *n == name)
                 .map(|(id, _)| *id)
                 .ok_or("route conflict: target is absent or not a physical sink")?;
-            Some((id, name.clone()))
+            d.selected = Some(id);
+            resolved.send_replace(Some(name.clone()));
+            props.insert("target.object", name.as_str());
+            props.insert("stream.capture.sink", "true");
+            props.insert("node.autoconnect", "true");
+            props.insert("node.dont-reconnect", "true");
+            props.insert("node.dont-fallback", "true");
         }
-    };
-    devices.borrow_mut().selected = target.as_ref().map(|(id, _)| *id);
-    let mut props = properties! {
-        "node.name" => "litz.capture", "media.type" => "Audio", "media.category" => "Capture",
-        "media.role" => "Music", "audio.channels" => "2", "audio.position" => "[ FL FR ]",
-        "node.latency" => "512/48000", "node.dont-reconnect" => "true",
-        "node.dont-fallback" => "true", "node.pause-on-idle" => "true",
-    };
-    if let Some((_, name)) = &target {
-        props.insert("target.object", name.as_str());
-        props.insert("stream.capture.sink", "true");
-        props.insert("node.autoconnect", "true");
-    } else {
-        props.insert("node.name", "litz.speaker");
-        props.insert("node.description", "Litz Phone Speaker");
-        props.insert("media.class", "Audio/Sink");
-        props.insert("media.category", "Playback");
-        props.insert("node.virtual", "true");
-        props.insert("node.autoconnect", "false");
     }
     let stream = pw::stream::StreamRc::new(core.clone(), "Litz Playback Capture", props)?;
     let (producer, consumer) = rtrb::RingBuffer::new(CAPACITY);
-    let process_fault = fault.clone();
     let format_loop = mainloop.clone();
     let ready = Arc::new(AtomicBool::new(false));
     let process_ready = ready.clone();
@@ -284,7 +310,6 @@ pub fn open(
                 let left = f32::from_ne_bytes(frame[..4].try_into().unwrap());
                 let right = f32::from_ne_bytes(frame[4..].try_into().unwrap());
                 if producer.push(Captured::new([left, right], at)).is_err() {
-                    process_fault.store(true, Ordering::Release);
                     break;
                 }
             }
@@ -313,7 +338,7 @@ pub fn open(
     let mut flags = pw::stream::StreamFlags::MAP_BUFFERS
         | pw::stream::StreamFlags::RT_PROCESS
         | pw::stream::StreamFlags::INACTIVE;
-    if target.is_some() {
+    if !matches!(route, Route::PhoneOnly) {
         flags |= pw::stream::StreamFlags::AUTOCONNECT;
     }
     stream.connect(spa::utils::Direction::Input, None, flags, &mut [pod])?;
@@ -326,6 +351,6 @@ pub fn open(
         stream,
         samples: Some(consumer),
         fault,
-        resolved: target.map(|(_, name)| name),
+        resolved,
     })
 }
