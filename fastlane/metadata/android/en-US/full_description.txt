@@ -1,0 +1,17 @@
+Litz Audio turns your phone into a microphone and a speaker for your computer. Audio travels over your own Wi-Fi or a USB cable.
+
+You also need Litz on the computer. It runs on Linux (PipeWire or PulseAudio) and on Windows, and you can get it at https://arturoatomplay.github.io/litz-audio/
+
+<b>Microphone</b>
+The phone shows up on the computer as a normal microphone, so you can pick it in calls, recordings and games.
+
+<b>Listen</b>
+Hear the computer's sound on the phone, from the output you choose.
+
+<b>Voice processing</b>
+Noise suppression, automatic level, a noise gate and a three-band equalizer. They run on the computer, not on the phone.
+
+<b>Pairing</b>
+Tap your computer in the app and check that both screens show the same six-digit code. You do this once; after that the phone reconnects on its own, and only phones you approved can connect.
+
+Audio is encrypted and stays on your local network. Litz has no accounts and no analytics.

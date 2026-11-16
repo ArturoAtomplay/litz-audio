@@ -28,7 +28,7 @@ UninstallDisplayIcon={app}\litzd.exe
 Source: "{#BinDir}\litzd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\litzdw.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\target\model\DeepFilterNet3_onnx.tar.gz"; DestDir: "{app}"
-Source: "..\..\packaging\android\icon-512.png"; DestDir: "{app}"; DestName: "litz.png"
+Source: "..\..\fastlane\metadata\android\en-US\images\icon.png"; DestDir: "{app}"; DestName: "litz.png"
 Source: "..\..\LICENSE"; DestDir: "{app}"
 Source: "..\..\THIRD_PARTY_NOTICES"; DestDir: "{app}"
 Source: "..\..\licenses\desktop.txt"; DestDir: "{app}"; DestName: "THIRD_PARTY_LICENSES.txt"

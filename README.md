@@ -10,8 +10,8 @@ Use your phone as a microphone on Linux or Windows, and listen to your computer'
     <th>Settings</th>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/home.png" width="300" alt="Home screen with the microphone and Listen turned on"></td>
-    <td><img src="docs/screenshots/settings.png" width="300" alt="Settings with RNNoise noise suppression and voice processing"></td>
+    <td><img src="fastlane/metadata/android/en-US/images/phoneScreenshots/home.png" width="300" alt="Home screen with the microphone and Listen turned on"></td>
+    <td><img src="fastlane/metadata/android/en-US/images/phoneScreenshots/settings.png" width="300" alt="Settings with RNNoise noise suppression and voice processing"></td>
   </tr>
 </table>
 

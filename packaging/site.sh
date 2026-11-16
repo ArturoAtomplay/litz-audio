@@ -8,5 +8,6 @@ version=${version#v}
 root=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$out"
 cp -R "$root/site/." "$out"
-cp "$root"/docs/screenshots/*.png "$root"/packaging/android/*.png "$out"
+images=$root/fastlane/metadata/android/en-US/images
+cp "$images"/*.png "$images"/phoneScreenshots/*.png "$out"
 find "$out" -name '*.html' -exec sed -i "s/@VERSION@/$version/g" {} +

@@ -4,8 +4,7 @@ on:
     branches: [main]
     paths:
       - site/**
-      - docs/screenshots/**
-      - packaging/android/*.png
+      - fastlane/metadata/android/en-US/images/**
       - packaging/site.sh
       - .github/workflows/site.yml
   workflow_run:
