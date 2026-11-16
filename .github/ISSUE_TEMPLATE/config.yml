@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Question or idea
+    url: https://github.com/ArturoAtomplay/litz-audio/discussions
+    about: Ask for help or talk about an idea in Discussions.
   - name: Security vulnerability
     url: https://github.com/ArturoAtomplay/litz-audio/security/advisories/new
     about: Report vulnerabilities privately, not in a public issue.
