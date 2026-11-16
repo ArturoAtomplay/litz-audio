@@ -335,7 +335,10 @@ mod toast {
         set(
             w!("Software\\Classes\\CLSID\\{BFD99F34-90AE-4D6D-A33A-6EB4D6FCC2A4}\\LocalServer32"),
             PCWSTR::null(),
-            &format!("\"{}\" -ToastActivated", exe.display()),
+            &format!(
+                "\"{}\" -ToastActivated",
+                exe.with_file_name("litzdw.exe").display()
+            ),
         )?;
         // SAFETY: APP_ID is a static NUL-terminated string. The MTA usage is
         // never released, so the class object stays reachable for the

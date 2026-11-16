@@ -1,4 +1,3 @@
-#![cfg_attr(windows, windows_subsystem = "windows")]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 mod approval;
@@ -14,12 +13,6 @@ mod settings;
 mod stream;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(windows)]
-    // SAFETY: AttachConsole uses only the documented parent-process sentinel.
-    // A terminal launch can then print setup and diagnostics.
-    unsafe {
-        windows_sys::Win32::System::Console::AttachConsole(u32::MAX);
-    }
     let args = std::env::args_os()
         .skip(1)
         .map(|arg| {
