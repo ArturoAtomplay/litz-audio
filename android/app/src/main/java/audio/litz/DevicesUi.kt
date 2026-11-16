@@ -371,7 +371,6 @@ private fun AddComputer(
     cancelPair: () -> Unit,
     refresh: () -> Unit,
 ) {
-    var candidate by remember { mutableStateOf<NearbyComputer?>(null) }
     var manualDialog by remember { mutableStateOf(false) }
     if (ui.pairing != null) {
         Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
@@ -419,7 +418,7 @@ private fun AddComputer(
         )
     nearby.forEach { computer ->
         ChoiceCard(computer.name, stringResource(R.string.nearby_tap_to_pair), enabled = !busy) {
-            candidate = computer
+            pair(computer)
         }
     }
     ui.incompatible.forEach { computer ->
@@ -437,30 +436,6 @@ private fun AddComputer(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(stringResource(R.string.pair_by_ip))
-    }
-    candidate?.let { computer ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.surface,
-            onDismissRequest = { candidate = null },
-            title = { Text(stringResource(R.string.pair_with_title, computer.name)) },
-            text = { Text(stringResource(R.string.pair_with_body, computer.name)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pair(computer)
-                        candidate = null
-                    },
-                    enabled = !busy,
-                ) {
-                    Text(stringResource(R.string.action_pair))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { candidate = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
     }
     if (manualDialog) ManualPairDialog(dismiss = { manualDialog = false }, pair = pair)
 }

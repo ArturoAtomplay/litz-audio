@@ -54,8 +54,6 @@
     <string name="pairing_allow_if_shows">Allow the connection on your computer if it shows:</string>
     <string name="pairing_codes_differ">If the codes differ, cancel.</string>
     <string name="pairing_confirm_if_showed">Continue only if your computer showed this same code:</string>
-    <string name="pair_with_title">Pair with %1$s?</string>
-    <string name="pair_with_body">Tap Pair, then allow the connection on %1$s. You only do this once.</string>
     <string name="pair_by_ip">Pair by IP address</string>
     <string name="pair_by_ip_body">Enter the computer\'s local IPv4 address. Litz verifies the computer\'s identity before saving it.</string>
     <string name="ip_address">IP address</string>
