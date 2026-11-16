@@ -35,7 +35,7 @@ systemctl --user enable --now litzd
 
 **Windows**: run the installer from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). To use the phone as a microphone you also need [VB-CABLE](https://vb-audio.com/Cable/).
 
-**Android**: install the APK from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). It has no ads.
+**Android**: install the APK from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases).
 
 ## Usage
 
@@ -45,11 +45,11 @@ systemctl --user enable --now litzd
 
 That's it; the phone reconnects on its own from then on. In your calling app, pick **Litz Microphone** (Linux) or **CABLE Output** (Windows) as the microphone.
 
-If the phone can't find the computer, use **Pair by IP address**, and make sure your firewall allows UDP port 47165 and mDNS (UDP 5353). USB tethering works too.
+If the phone can't find the computer, use **Pair by IP address**, and make sure your firewall allows UDP port 47165 and mDNS (UDP 5353). USB tethering works too. For anything else, see [Troubleshooting](docs/troubleshooting.md).
 
 With the microphone on, the computer also hears whatever the phone's own speaker plays. Headphones avoid that with no loss in quality. Without them, the **Calls and meetings** recording mode in Settings uses the phone's own echo cancellation when it has one; Android then processes your voice as it does in a call.
 
-When a phone pairs, both screens show the same six-digit code; allow it only if they match. To see or remove paired phones on the computer, run `litzd devices` or `litzd forget NAME`. On Windows, run them from the install folder (`%LOCALAPPDATA%\Programs\Litz Audio`); the output appears after the prompt returns.
+When a phone pairs, both screens show the same six-digit code; allow it only if they match. To see or remove paired phones on the computer, run `litzd devices` or `litzd forget NAME`.
 
 ## Building
 
