@@ -2,7 +2,7 @@
 # AUR package built from the GitHub release tarball. After bumping pkgver,
 # run `updpkgsums` and `makepkg --printsrcinfo > .SRCINFO`.
 pkgname=litz-audio-bin
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Use your Android phone as a microphone and listen to your computer'
 arch=('x86_64' 'aarch64')
@@ -13,8 +13,8 @@ provides=('litz-audio')
 conflicts=('litz-audio')
 source_x86_64=("https://github.com/ArturoAtomplay/litz-audio/releases/download/v$pkgver/litz-$pkgver-linux-x86_64.tar.gz")
 source_aarch64=("https://github.com/ArturoAtomplay/litz-audio/releases/download/v$pkgver/litz-$pkgver-linux-aarch64.tar.gz")
-sha256sums_x86_64=('373bbe07b027fa5ed8170238b6e191f742a1d9449130a5ff543666fe826c40f3')
-sha256sums_aarch64=('6bcd54fc24596ac788e9f674ae5494ff5d2b9ff50d871bb6c547bd11aa1afe1c')
+sha256sums_x86_64=('132642ef4116bfa5458acf5a4a419839b0eefafa157622bb99ccad2cf7114e93')
+sha256sums_aarch64=('49780e98c521cb19a98955bd3114fa8ac6a648aece3344cc0ebbd3a2f3199ad0')
 
 package() {
   cd "litz-$pkgver-linux-$CARCH"
