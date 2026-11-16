@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Litz Audio | Usa tu teléfono Android como micrófono para PC (Linux y Windows)</title>
+<meta name="description" content="Litz Audio convierte tu teléfono o celular Android en micrófono inalámbrico y altavoz para una PC con Linux o Windows, por Wi-Fi o USB. Gratis y de código abierto.">
+<link rel="canonical" href="https://arturoatomplay.github.io/litz-audio/es/">
+<link rel="alternate" hreflang="en" href="https://arturoatomplay.github.io/litz-audio/">
+<link rel="alternate" hreflang="es" href="https://arturoatomplay.github.io/litz-audio/es/">
+<link rel="alternate" hreflang="x-default" href="https://arturoatomplay.github.io/litz-audio/">
+<link rel="icon" type="image/png" href="../icon-512.png">
+<link rel="stylesheet" href="../style.css">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="es_ES">
+<meta property="og:title" content="Litz Audio">
+<meta property="og:description" content="Usa tu teléfono Android como micrófono y altavoz de tu PC con Linux o Windows.">
+<meta property="og:url" content="https://arturoatomplay.github.io/litz-audio/es/">
+<meta property="og:image" content="https://arturoatomplay.github.io/litz-audio/feature-graphic.png">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+<header>
+    <a class="brand" href="./">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="9" width="2.6" height="6" rx="1.3"/><rect x="6.1" y="5.5" width="2.6" height="13" rx="1.3"/><rect x="10.7" y="7.5" width="2.6" height="9" rx="1.3"/><rect x="15.3" y="3.5" width="2.6" height="17" rx="1.3"/><rect x="19.9" y="8" width="2.6" height="8" rx="1.3"/></svg>
+        Litz Audio
+    </a>
+    <nav aria-label="Sitio">
+        <a href="https://github.com/ArturoAtomplay/litz-audio/blob/main/docs/troubleshooting.md">Ayuda</a>
+        <a href="https://github.com/ArturoAtomplay/litz-audio">GitHub</a>
+        <a href="../" lang="en" hreflang="en">English</a>
+    </nav>
+</header>
+<main id="content">
+    <div class="intro">
+        <div>
+            <h1>Usa tu teléfono Android como micrófono para tu PC</h1>
+            <p class="lead">Litz envía el micrófono de tu teléfono Android a una computadora con Linux o Windows, y también puede reproducir en el teléfono lo que suena en la computadora. Funciona por tu Wi-Fi o por cable USB.</p>
+            <div class="actions">
+                <a class="button" href="#instalar">Instalar Litz @VERSION@</a>
+                <span class="note">Gratis y de código abierto, para Linux y Windows.</span>
+            </div>
+        </div>
+        <img src="../home.png" width="540" height="1200" alt="La app de Litz conectada a una computadora, con el micrófono y la escucha activados">
+    </div>
+
+    <section id="instalar">
+        <h2>Instalar</h2>
+        <p>Hace falta Litz en la computadora y en el teléfono.</p>
+        <div class="platforms">
+            <div>
+                <h3 class="gnu">Linux</h3>
+                <div class="command"><code tabindex="0">curl -fsSL https://github.com/ArturoAtomplay/litz-audio/releases/latest/download/install.sh | sh</code><button type="button" aria-live="polite" data-done="Copiado">Copiar</button></div>
+                <p>Se instala en <code>~/.local</code> sin root y arranca al iniciar sesión. Necesita PipeWire 1.0 o posterior, o PulseAudio. También hay <a href="https://github.com/ArturoAtomplay/litz-audio/releases/latest">paquetes .deb y .rpm</a> y un módulo de NixOS.</p>
+            </div>
+            <div>
+                <h3 class="clippy" data-says="Parece que estás instalando un micrófono. ¿Necesitas ayuda?">Windows</h3>
+                <p><a class="download" href="https://github.com/ArturoAtomplay/litz-audio/releases/download/v@VERSION@/Litz-Setup-@VERSION@.exe">Descargar el instalador</a> <span class="note">64 bits</span></p>
+                <p>Para usar el teléfono como micrófono, Windows necesita además el controlador gratuito <a href="https://vb-audio.com/Cable/">VB-CABLE</a>. Escuchar la computadora en el teléfono funciona sin él.</p>
+            </div>
+            <div>
+                <h3 class="android">Android</h3>
+                <p><a class="download" href="https://github.com/ArturoAtomplay/litz-audio/releases/download/v@VERSION@/litz-@VERSION@.apk">Descargar el APK</a> <span class="note">Android 6 o posterior</span></p>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <div class="columns">
+            <div>
+                <h2>Se empareja en un minuto</h2>
+                <ol>
+                    <li>Conecta el teléfono y la computadora a la misma red.</li>
+                    <li>Abre Litz en el teléfono y toca tu computadora.</li>
+                    <li>Las dos pantallas muestran un código de seis dígitos. Si coinciden, pulsa <strong>Allow</strong> en la computadora.</li>
+                </ol>
+                <p>Solo se hace una vez. Después el teléfono se reconecta solo cuando la computadora está encendida.</p>
+            </div>
+            <div>
+                <h2>Qué incluye</h2>
+                <ul>
+                    <li>El teléfono aparece como un micrófono normal, así que puedes elegirlo en Discord, OBS, Zoom o una llamada desde el navegador.</li>
+                    <li>La escucha lleva el sonido de la computadora al teléfono, desde la salida que elijas.</li>
+                    <li>Supresión de ruido (RNNoise o DeepFilterNet), nivel automático, puerta de ruido y ecualizador de tres bandas. Se procesan en la computadora, no en el teléfono.</li>
+                    <li>Audio Opus a 48 kHz por una conexión cifrada. Solo se conectan los teléfonos que hayas aprobado.</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section>
+        <h2>Preguntas</h2>
+        <div class="questions">
+            <div>
+                <h3>¿En qué se diferencia de WO Mic o AudioRelay?</h3>
+                <p>Litz es de código abierto y todas sus funciones son gratis. Además, en Linux funciona como un servicio nativo para PipeWire y PulseAudio, no solo en Windows.</p>
+            </div>
+            <div>
+                <h3>¿Puedo usarlo por cable USB?</h3>
+                <p>Sí. Conecta el teléfono y activa el anclaje USB en los ajustes de Android. Litz se conecta entonces por el cable.</p>
+            </div>
+            <div>
+                <h3>¿Funciona por internet?</h3>
+                <p>No. El teléfono y la computadora tienen que estar en la misma red local, o unidos por anclaje USB.</p>
+            </div>
+            <div>
+                <h3>¿Necesita root o permisos de administrador?</h3>
+                <p>Litz no. En Linux vive en tu carpeta personal y el instalador de Windows es por usuario. Solo VB-CABLE pide permisos de administrador.</p>
+            </div>
+            <div>
+                <h3>¿Por qué Windows me avisa al abrir el instalador?</h3>
+                <p>El instalador todavía no está firmado, así que SmartScreen no lo conoce. Cada versión trae un archivo <code>SHA256SUMS</code> por si quieres comprobar la descarga.</p>
+            </div>
+            <div>
+                <h3>¿Hay versión para iPhone o macOS?</h3>
+                <p>Todavía no. Hoy es Android de un lado y Linux o Windows del otro.</p>
+            </div>
+            <div>
+                <h3>¿Cuánto cuesta?</h3>
+                <p>Nada. Litz es <span class="gpl" tabindex="0">software libre bajo la GPL<span class="saint"><img src="../ignucius.jpg" width="176" height="176" alt="Richard Stallman vestido de San IGNUcio, con un disco duro como aureola">San IGNUcio bendice tu computadora.<a href="https://commons.wikimedia.org/wiki/File:Saint_Ignucius_blessing_computers.jpg">Foto: Damián Buonamico, CC BY 3.0, recortada</a></span></span>. Si te sirve, puedes <a href="https://ko-fi.com/arturoatomplay">apoyarlo en Ko-fi</a>.</p>
+            </div>
+            <div>
+                <h3>Algo no funciona</h3>
+                <p>La <a href="https://github.com/ArturoAtomplay/litz-audio/blob/main/docs/troubleshooting.md">página de solución de problemas</a> (en inglés) repasa las causas habituales. Si no está ahí, <a href="https://github.com/ArturoAtomplay/litz-audio/issues">abre un issue</a>.</p>
+            </div>
+        </div>
+    </section>
+</main>
+<footer>
+    <span>Litz Audio es software libre, GPL-3.0-or-later.</span>
+    <a href="https://github.com/ArturoAtomplay/litz-audio/blob/main/PRIVACY.md">Privacidad</a>
+    <a href="https://github.com/ArturoAtomplay/litz-audio/releases">Versiones</a>
+    <a href="https://ko-fi.com/arturoatomplay">Ko-fi</a>
+</footer>
+<script src="../site.js"></script>
+</body>
+</html>
