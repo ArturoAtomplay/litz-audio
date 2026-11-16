@@ -18,7 +18,7 @@ pub fn is_cable(device: &Device) -> bool {
         .is_ok_and(|name| name == "VB-Audio Virtual Cable")
 }
 pub fn outputs() -> Result<Vec<Endpoint>> {
-    let devices = DeviceEnumerator::new()?.get_device_collection(&Direction::Render)?;
+    let devices = DeviceEnumerator::new()?.get_device_collection(Direction::Render)?;
     let mut result = Vec::new();
     for i in 0..devices.get_nbr_devices()?.min(32) {
         let device = devices.get_device_at_index(i)?;
@@ -37,7 +37,7 @@ pub fn select(route: &Route) -> Result<Device> {
     let enumerator = DeviceEnumerator::new()?;
     let device = match route {
         Route::Mirror { name: Some(id) } => enumerator.get_device(id)?,
-        Route::Mirror { name: None } => enumerator.get_default_device(&Direction::Render)?,
+        Route::Mirror { name: None } => enumerator.get_default_device(Direction::Render)?,
         Route::PhoneOnly => return Err("Phone-only output is unavailable".into()),
     };
     if device.get_direction() != Direction::Render || is_cable(&device) {
@@ -59,14 +59,15 @@ impl Capture {
         let device = select(route)?;
         let id = device.get_id()?;
         let mut client = device.get_iaudioclient()?;
-        let format = WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None);
+        let format = WaveFormat::new(32, 32, SampleType::Float, 48000, 2, None);
         client.initialize_client(
             &format,
-            &Direction::Capture,
-            &StreamMode::EventsShared {
+            Direction::Capture,
+            StreamMode::EventsShared {
                 autoconvert: true,
                 buffer_duration_hns: 200000,
             },
+            None,
         )?;
         let event = client.set_get_eventhandle()?;
         // SAFETY: WASAPI initialized for capture; COM keeps this service alive.

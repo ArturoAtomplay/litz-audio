@@ -33,7 +33,7 @@ struct Render {
 }
 impl Render {
     fn open() -> Result<Self> {
-        let devices = DeviceEnumerator::new()?.get_device_collection(&Direction::Render)?;
+        let devices = DeviceEnumerator::new()?.get_device_collection(Direction::Render)?;
         let device = (0..devices.get_nbr_devices()?.min(32))
             .filter_map(|i| devices.get_device_at_index(i).ok())
             .filter(capture::is_cable)
@@ -45,12 +45,13 @@ impl Render {
             .ok_or("Install VB-CABLE to use the phone microphone; listening remains available")?;
         let mut client = device.get_iaudioclient()?;
         client.initialize_client(
-            &WaveFormat::new(32, 32, &SampleType::Float, 48000, 2, None),
-            &Direction::Render,
-            &StreamMode::EventsShared {
+            &WaveFormat::new(32, 32, SampleType::Float, 48000, 2, None),
+            Direction::Render,
+            StreamMode::EventsShared {
                 autoconvert: true,
                 buffer_duration_hns: 200000,
             },
+            None,
         )?;
         let event = client.set_get_eventhandle()?;
         let render = client.get_audiorenderclient()?;
@@ -351,8 +352,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
                     dest[..4].copy_from_slice(source);
                     dest[4..].copy_from_slice(source);
                 }
-                r.render
-                    .write_to_device(frames, &stereo[..frames * 8], None)?;
+                r.render.write_to_device(&stereo[..frames * 8], None)?;
                 if frames > 0
                     && demand
                         .push(Demand {
