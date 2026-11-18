@@ -30,10 +30,18 @@ jobs:
         run: packaging/fetch-model.sh target/model
       - run: cargo clippy --locked -p litz-core -p litzd --all-targets --all-features -- -D warnings
       - run: cargo test --locked -p litz-core -p litzd --all-features
+      - name: Driver
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          nuget restore crates/desktop/driver/packages.config -PackagesDirectory crates/desktop/driver/packages
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find 'MSBuild\**\Bin\MSBuild.exe'
+          & $msbuild crates/desktop/driver/litzaudio.vcxproj /p:Configuration=Release /p:Platform=x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
-        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DBinDir=..\..\target\debug packaging/windows/litz.iss'
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DBinDir=..\..\target\debug /DDriverDir=..\..\crates\desktop\driver\out\Release\litzaudio packaging/windows/litz.iss'
       - name: Debian package
         if: runner.os == 'Linux'
         run: |
