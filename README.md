@@ -33,7 +33,7 @@ This installs Litz into `~/.local` and starts it at login. No root needed. There
 systemctl --user enable --now litzd
 ```
 
-**Windows**: run the installer from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). To use the phone as a microphone you also need [VB-CABLE](https://vb-audio.com/Cable/).
+**Windows**: run the installer from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). It asks for administrator rights once, to install Litz Microphone, Litz's own audio driver.
 
 **Android**: install the APK from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases).
 
@@ -43,7 +43,7 @@ systemctl --user enable --now litzd
 2. Open Litz on the phone and tap your computer.
 3. Click **Allow** on the computer.
 
-That's it; the phone reconnects on its own from then on. In your calling app, pick **Litz Microphone** (Linux) or **CABLE Output** (Windows) as the microphone.
+That's it; the phone reconnects on its own from then on. In your calling app, pick **Litz Microphone** as the microphone.
 
 If the phone can't find the computer, use **Pair by IP address**, and make sure your firewall allows UDP port 47165 and mDNS (UDP 5353). USB tethering works too. For anything else, see [Troubleshooting](docs/troubleshooting.md).
 

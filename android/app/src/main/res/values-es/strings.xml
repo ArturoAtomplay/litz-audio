@@ -213,7 +213,7 @@
     <string name="failure_revoked">Esta computadora ya no confía en este teléfono. Vincúlala de nuevo.</string>
     <string name="failure_moved">El audio pasó a otro teléfono.</string>
     <string name="failure_refused">La computadora no pudo iniciar el audio.</string>
-    <string name="failure_no_virtual_microphone">La computadora no tiene un micrófono virtual. Instala VB-CABLE en ella para usar este teléfono como micrófono.</string>
+    <string name="failure_no_virtual_microphone">La computadora no tiene un micrófono virtual. Reinstala Litz en ella para usar este teléfono como micrófono.</string>
     <string name="failure_capture_unavailable">No se puede capturar el sonido de la computadora. Elige una salida de la computadora en Ajustes.</string>
     <string name="failure_computer_busy">La computadora está ocupada. Inténtalo de nuevo.</string>
     <string name="failure_computer_unsupported">La computadora no admite esto. Actualiza Litz en ella.</string>

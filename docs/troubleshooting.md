@@ -69,10 +69,7 @@ The app and `litzd` are from versions that can't talk to each other. Install the
 
 ## Apps on the computer don't hear the phone
 
-Pick the right microphone in the app you are calling or recording with:
-
-- Linux: **Litz Microphone**
-- Windows: **CABLE Output**, which needs [VB-CABLE](https://vb-audio.com/Cable/) installed. Without it the phone says the computer has no virtual microphone.
+Pick **Litz Microphone** in the app you are calling or recording with. On Windows, if it is missing and the phone says the computer has no virtual microphone, run the Litz installer again.
 
 Also check that **Mute** is off in the Litz app.
 
