@@ -140,7 +140,18 @@ internal fun DevicesApp(
                 error?.let { Notice(it.resolve(), error = true) }
                 when (screen) {
                     Screen.Home ->
-                        if (selected == null) {
+                        if (selected == null && ui.saved.isNotEmpty()) {
+                            Computers(
+                                ui,
+                                null,
+                                busy,
+                                select,
+                                pair,
+                                confirmPair,
+                                cancelPair,
+                                refresh,
+                            )
+                        } else if (selected == null) {
                             Text(
                                 stringResource(R.string.home_add_title),
                                 style = MaterialTheme.typography.titleLarge,
@@ -175,37 +186,17 @@ internal fun DevicesApp(
                                 refreshRoutes,
                             )
                         }
-                    Screen.Computers -> {
-                        val others = ui.saved.filter { it.fingerprint != ui.selected }
-                        if (selected != null || others.isNotEmpty()) {
-                            Text(
-                                stringResource(R.string.computers_yours),
-                                style = MaterialTheme.typography.titleLarge,
-                            )
-                            selected?.let {
-                                OutlinedCard(
-                                    Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(24.dp),
-                                ) {
-                                    SettingValue(
-                                        it.name,
-                                        stringResource(R.string.computer_using_now),
-                                        enabled = false,
-                                    )
-                                }
-                            }
-                            others.forEach { computer ->
-                                ChoiceCard(
-                                    computer.name,
-                                    stringResource(R.string.computer_tap_to_switch),
-                                    enabled = !busy,
-                                ) {
-                                    select(computer)
-                                }
-                            }
-                        }
-                        AddComputer(ui, busy, pair, confirmPair, cancelPair, refresh)
-                    }
+                    Screen.Computers ->
+                        Computers(
+                            ui,
+                            selected,
+                            busy,
+                            select,
+                            pair,
+                            confirmPair,
+                            cancelPair,
+                            refresh,
+                        )
                     Screen.Settings -> SettingsScreen(ui, status, busy, edit, apply, voice)
                 }
             }
@@ -846,4 +837,36 @@ private fun Notice(text: String, error: Boolean = false) {
     ) {
         Text(text, Modifier.padding(16.dp))
     }
+}
+
+@Composable
+private fun Computers(
+    ui: UiState,
+    selected: SavedComputer?,
+    busy: Boolean,
+    select: (SavedComputer) -> Unit,
+    pair: (NearbyComputer) -> Unit,
+    confirmPair: () -> Unit,
+    cancelPair: () -> Unit,
+    refresh: () -> Unit,
+) {
+    val others = ui.saved.filter { it.fingerprint != ui.selected }
+    if (selected != null || others.isNotEmpty()) {
+        Text(stringResource(R.string.computers_yours), style = MaterialTheme.typography.titleLarge)
+        selected?.let {
+            OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+                SettingValue(it.name, stringResource(R.string.computer_using_now), enabled = false)
+            }
+        }
+        others.forEach { computer ->
+            ChoiceCard(
+                computer.name,
+                stringResource(R.string.computer_tap_to_switch),
+                enabled = !busy,
+            ) {
+                select(computer)
+            }
+        }
+    }
+    AddComputer(ui, busy, pair, confirmPair, cancelPair, refresh)
 }
