@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <LitzPackages>$(MSBuildThisFileDirectory)packages\</LitzPackages>
+  </PropertyGroup>
+  <Import Project="$(LitzPackages)Microsoft.Windows.WDK.x64.10.0.26100.6584\build\native\Microsoft.Windows.WDK.x64.props" Condition="Exists('$(LitzPackages)Microsoft.Windows.WDK.x64.10.0.26100.6584\build\native\Microsoft.Windows.WDK.x64.props')" />
+  <Import Project="$(LitzPackages)Microsoft.Windows.SDK.CPP.x64.10.0.26100.6584\build\native\Microsoft.Windows.SDK.cpp.x64.props" Condition="Exists('$(LitzPackages)Microsoft.Windows.SDK.CPP.x64.10.0.26100.6584\build\native\Microsoft.Windows.SDK.cpp.x64.props')" />
+  <Import Project="$(LitzPackages)Microsoft.Windows.SDK.CPP.10.0.26100.6584\build\native\Microsoft.Windows.SDK.cpp.props" Condition="Exists('$(LitzPackages)Microsoft.Windows.SDK.CPP.10.0.26100.6584\build\native\Microsoft.Windows.SDK.cpp.props')" />
+</Project>

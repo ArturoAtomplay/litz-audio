@@ -63,6 +63,17 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+Litz Microphone driver (Windows)
+--------------------------------
+Source: https://github.com/microsoft/Windows-driver-samples (audio/simpleaudiosample)
+
+The Windows driver in crates/desktop/driver is derived from Microsoft's
+Simple Audio Sample and is a separate program distributed under the
+Microsoft Public License (MS-PL); see crates/desktop/driver/LICENSE, which
+the Windows installer copies to driver\LICENSE.txt.
+
+Copyright (c) Microsoft Corporation.
+
 Rust crates
 -----------
 The licenses and copyright notices of every Rust crate compiled into litzd

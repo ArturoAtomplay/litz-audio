@@ -1,0 +1,30 @@
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION LITZ_VERSION
+PRODUCTVERSION LITZ_VERSION
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DRV
+FILESUBTYPE VFT2_DRV_SOUND
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Litz Audio"
+            VALUE "FileDescription", "Litz Audio Driver"
+            VALUE "FileVersion", LITZ_VERSION_STR
+            VALUE "InternalName", "litzaudio.sys"
+            VALUE "LegalCopyright", "Copyright (c) Microsoft Corporation. MS-PL."
+            VALUE "OriginalFilename", "litzaudio.sys"
+            VALUE "ProductName", "Litz Audio"
+            VALUE "ProductVersion", LITZ_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
