@@ -5,6 +5,8 @@ mod audio;
 mod cli;
 mod devices;
 mod discovery;
+#[cfg(windows)]
+mod driver;
 mod identity;
 mod pairing;
 mod platform;
@@ -32,6 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         cli::Command::Devices => devices::list(),
+        #[cfg(windows)]
+        cli::Command::InstallDriver(inf) => restart_if(driver::install(&inf)?),
+        #[cfg(windows)]
+        cli::Command::UninstallDriver => restart_if(driver::uninstall()?),
         cli::Command::Forget(phone) => devices::forget(&phone),
         cli::Command::Version => {
             println!("litzd {}", env!("CARGO_PKG_VERSION"));
@@ -39,4 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         cli::Command::Run { tone, route } => audio::run(tone, route),
     }
+}
+
+/// Exits with ERROR_SUCCESS_REBOOT_REQUIRED, which installers understand.
+#[cfg(windows)]
+fn restart_if(needed: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if needed {
+        eprintln!("litzd: restart Windows to finish updating Litz Microphone");
+        std::process::exit(3010);
+    }
+    Ok(())
 }

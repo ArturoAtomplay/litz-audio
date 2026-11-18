@@ -12,7 +12,14 @@ pub enum Command {
     Version,
     Devices,
     Forget(String),
-    Run { tone: bool, route: Option<Route> },
+    #[cfg(windows)]
+    InstallDriver(std::path::PathBuf),
+    #[cfg(windows)]
+    UninstallDriver,
+    Run {
+        tone: bool,
+        route: Option<Route>,
+    },
 }
 
 pub fn parse(args: Vec<String>) -> Result<Command, &'static str> {
@@ -23,6 +30,12 @@ pub fn parse(args: Vec<String>) -> Result<Command, &'static str> {
         [command, phone] if command == "forget" && !phone.is_empty() => {
             return Ok(Command::Forget(phone.clone()));
         }
+        #[cfg(windows)]
+        [command, inf] if command == "install-driver" => {
+            return Ok(Command::InstallDriver(inf.into()));
+        }
+        #[cfg(windows)]
+        [only] if only == "uninstall-driver" => return Ok(Command::UninstallDriver),
         _ => {}
     }
     let mut args = args.into_iter();

@@ -10,10 +10,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use wasapi::{
-    AudioClient, AudioRenderClient, DeviceEnumerator, DeviceEventCallbacks, Direction, Handle,
-    Role, SampleType, StreamMode, WaveFormat,
-};
+use wasapi::{DeviceEnumerator, DeviceEventCallbacks, Direction, Role};
+
+use crate::driver::Microphone;
 
 static STOP: AtomicBool = AtomicBool::new(false);
 unsafe extern "system" fn shutdown(_: u32) -> i32 {
@@ -26,49 +25,6 @@ impl Drop for Com {
         wasapi::deinitialize();
     }
 }
-struct Render {
-    client: AudioClient,
-    render: AudioRenderClient,
-    event: Handle,
-}
-impl Render {
-    fn open() -> Result<Self> {
-        let devices = DeviceEnumerator::new()?.get_device_collection(Direction::Render)?;
-        let device = (0..devices.get_nbr_devices()?.min(32))
-            .filter_map(|i| devices.get_device_at_index(i).ok())
-            .filter(capture::is_cable)
-            .min_by_key(|device| {
-                !device
-                    .get_description()
-                    .is_ok_and(|pin| pin == "CABLE Input")
-            })
-            .ok_or("Install VB-CABLE to use the phone microphone; listening remains available")?;
-        let mut client = device.get_iaudioclient()?;
-        client.initialize_client(
-            &WaveFormat::new(32, 32, SampleType::Float, 48000, 2, None),
-            Direction::Render,
-            StreamMode::EventsShared {
-                autoconvert: true,
-                buffer_duration_hns: 200000,
-            },
-            None,
-        )?;
-        let event = client.set_get_eventhandle()?;
-        let render = client.get_audiorenderclient()?;
-        client.start_stream()?;
-        Ok(Self {
-            client,
-            render,
-            event,
-        })
-    }
-}
-impl Drop for Render {
-    fn drop(&mut self) {
-        let _ = self.client.stop_stream();
-    }
-}
-
 /// A WASAPI object on its way from the device thread to the audio thread.
 struct Opened<T>(T);
 // SAFETY: COM objects made in the multithreaded apartment may be called from
@@ -121,7 +77,7 @@ enum Ready {
         tokio::sync::oneshot::Sender<Option<CaptureRoute>>,
         Permit,
     ),
-    Render(Opened<Render>),
+    Microphone(Microphone),
     Moved(Option<Opened<Box<Capture>>>),
 }
 
@@ -193,8 +149,8 @@ fn serve_devices(
         }
         checked = Instant::now();
         if !mic_available.load(Ordering::Acquire)
-            && let Ok(render) = Render::open()
-            && ready.send(Ready::Render(Opened(render))).is_err()
+            && let Ok(microphone) = Microphone::open()
+            && ready.send(Ready::Microphone(microphone)).is_err()
         {
             return;
         }
@@ -226,16 +182,14 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         Some(route @ Route::Mirror { .. }) => route,
         _ => Route::Mirror { name: None },
     });
-    let mut render = Render::open().ok();
-    if render.is_none() {
-        eprintln!(
-            "litzd: virtual microphone unavailable; install VB-CABLE, then select CABLE Output in calling apps"
-        );
+    let mut microphone = Microphone::open().ok();
+    if microphone.is_none() {
+        eprintln!("litzd: Litz Microphone unavailable; reinstall Litz to restore its audio driver");
     }
     let mut capture = Capture::open(&route).ok();
     let wake = Wake::try_new()?;
     let reset = Arc::new(AtomicBool::new(true));
-    let mic_available = Arc::new(AtomicBool::new(render.is_some()));
+    let mic_available = Arc::new(AtomicBool::new(microphone.is_some()));
     let mut fault = Arc::new(AtomicBool::new(false));
     let mut follow = matches!(route, Route::Mirror { name: None });
     let mut listening = false;
@@ -271,8 +225,10 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
             .name("litz-devices".into())
             .spawn(move || serve_devices(work, notify, prepared, mic_available, route, capture))?
     };
+    let timer = crate::platform::Timer::new()?;
+    let mut feeding = false;
     let mut mono = [0u8; pcm::CAPACITY * 4];
-    let mut stereo = [0u8; pcm::CAPACITY * 8];
+    let mut samples = [0i32; pcm::CAPACITY];
     while !STOP.load(Ordering::Acquire) && !devices.is_finished() {
         if let Ok(ready) = ready.try_recv() {
             match ready {
@@ -302,8 +258,8 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
                     });
                     let _ = reply.send(result);
                 }
-                Ready::Render(Opened(next)) => {
-                    render = Some(next);
+                Ready::Microphone(next) => {
+                    microphone = Some(next);
                     mic_available.store(true, Ordering::Release);
                 }
                 Ready::Moved(next) => {
@@ -332,27 +288,30 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
                 wake.signal();
             }
         }
-        if let Some(r) = &render {
+        if let Some(m) = &microphone {
             let result = (|| -> Result<()> {
-                let frames = r.client.get_available_space_in_frames()? as usize;
-                if frames > pcm::CAPACITY {
-                    return Err("WASAPI render backlog".into());
+                let (running, queued) = m.state()?;
+                if !running {
+                    feeding = false;
+                    return Ok(());
                 }
-                let restart = reset.swap(false, Ordering::AcqRel);
+                let restart = reset.swap(false, Ordering::AcqRel) || !feeding;
+                feeding = true;
                 if restart {
                     consumer.clear();
                 }
+                let frames = Microphone::TARGET.saturating_sub(queued).min(pcm::CAPACITY);
                 consumer.render(&mut mono[..frames * 4]);
-                for (source, dest) in mono[..frames * 4]
+                for (source, sample) in mono[..frames * 4]
                     .as_chunks::<4>()
                     .0
                     .iter()
-                    .zip(stereo.as_chunks_mut::<8>().0.iter_mut())
+                    .zip(&mut samples)
                 {
-                    dest[..4].copy_from_slice(source);
-                    dest[4..].copy_from_slice(source);
+                    *sample =
+                        (f32::from_le_bytes(*source).clamp(-1.0, 1.0) * 2_147_483_648.0) as i32;
                 }
-                r.render.write_to_device(&stereo[..frames * 8], None)?;
+                m.write(&samples[..frames])?;
                 if frames > 0
                     && demand
                         .push(Demand {
@@ -368,18 +327,17 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
             })();
             if let Err(error) = result {
                 eprintln!("litzd: {error}");
-                render = None;
+                microphone = None;
+                feeding = false;
                 mic_available.store(false, Ordering::Release);
                 consumer.clear();
             }
         }
         wake.signal();
-        let event = render
-            .as_ref()
-            .map(|r| &r.event)
-            .or_else(|| capture.as_ref().filter(|c| c.active).map(|c| &c.event));
-        if let Some(event) = event {
-            let _ = event.wait_for_event(10);
+        if feeding {
+            timer.sleep(Duration::from_millis(5));
+        } else if let Some(c) = capture.as_ref().filter(|c| c.active) {
+            let _ = c.event.wait_for_event(10);
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }

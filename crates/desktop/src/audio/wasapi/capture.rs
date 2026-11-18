@@ -9,20 +9,20 @@ use crate::audio::{CAPACITY, Captured};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Matches the adapter VB-CABLE's driver installs, not an endpoint name people
-/// can rename in Sound settings. Its "CABLE Input" and "CABLE In 16 Ch" pins
-/// both feed CABLE Output, so neither is a listening source.
-pub fn is_cable(device: &Device) -> bool {
+/// Matches the adapter Litz's driver installs, not an endpoint name people can
+/// rename in Sound settings. Its only output feeds Litz Microphone, so it is
+/// never a listening source.
+pub fn is_litz(device: &Device) -> bool {
     device
         .get_interface_friendlyname()
-        .is_ok_and(|name| name == "VB-Audio Virtual Cable")
+        .is_ok_and(|name| name == "Litz Audio")
 }
 pub fn outputs() -> Result<Vec<Endpoint>> {
     let devices = DeviceEnumerator::new()?.get_device_collection(Direction::Render)?;
     let mut result = Vec::new();
     for i in 0..devices.get_nbr_devices()?.min(32) {
         let device = devices.get_device_at_index(i)?;
-        if is_cable(&device) {
+        if is_litz(&device) {
             continue;
         }
         let name = device.get_id()?;
@@ -40,7 +40,7 @@ pub fn select(route: &Route) -> Result<Device> {
         Route::Mirror { name: None } => enumerator.get_default_device(Direction::Render)?,
         Route::PhoneOnly => return Err("Phone-only output is unavailable".into()),
     };
-    if device.get_direction() != Direction::Render || is_cable(&device) {
+    if device.get_direction() != Direction::Render || is_litz(&device) {
         return Err("Microphone loopback is not a listening source".into());
     }
     Ok(device)

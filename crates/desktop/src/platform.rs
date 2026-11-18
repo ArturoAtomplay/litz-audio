@@ -62,6 +62,47 @@ pub fn pro_audio_thread() {
         );
     }
 }
+/// A sleep with sub-millisecond precision, unlike the default 15.6 ms tick.
+#[cfg(windows)]
+pub struct Timer(std::os::windows::io::OwnedHandle);
+#[cfg(windows)]
+impl Timer {
+    pub fn new() -> io::Result<Self> {
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, CreateWaitableTimerExW, TIMER_ALL_ACCESS,
+        };
+        // SAFETY: an anonymous timer with default security; the result is checked.
+        let handle = unsafe {
+            CreateWaitableTimerExW(
+                std::ptr::null(),
+                std::ptr::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS,
+            )
+        };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the handle is valid and owned by nothing else.
+        Ok(Self(unsafe {
+            std::os::windows::io::OwnedHandle::from_raw_handle(handle)
+        }))
+    }
+    pub fn sleep(&self, duration: std::time::Duration) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Threading::{
+            INFINITE, SetWaitableTimer, WaitForSingleObject,
+        };
+        let due = -((duration.as_nanos() / 100) as i64);
+        // SAFETY: the timer handle is open; a relative one-shot due time.
+        unsafe {
+            if SetWaitableTimer(self.0.as_raw_handle(), &due, 0, None, std::ptr::null(), 0) != 0 {
+                WaitForSingleObject(self.0.as_raw_handle(), INFINITE);
+            }
+        }
+    }
+}
 /// Bound allocations even if a file grows between metadata validation and read.
 pub fn read_limited(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
     use io::Read;
