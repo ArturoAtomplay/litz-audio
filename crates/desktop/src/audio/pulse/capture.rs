@@ -99,20 +99,20 @@ impl Capture {
             }
         };
         let follows = matches!(route, Route::Mirror { name: None });
+        let spec = Spec {
+            format: Format::F32le,
+            rate: litz_core::pcm::RATE,
+            channels: 2,
+        };
+        let Some(stream) = Stream::new(&mut server.context, "Litz Playback Capture", &spec, None)
+        else {
+            if let Some(module) = module {
+                server.unload(module);
+            }
+            return Err("PulseAudio capture stream".into());
+        };
         let mut capture = Self {
-            stream: Rc::new(RefCell::new(
-                Stream::new(
-                    &mut server.context,
-                    "Litz Playback Capture",
-                    &Spec {
-                        format: Format::F32le,
-                        rate: litz_core::pcm::RATE,
-                        channels: 2,
-                    },
-                    None,
-                )
-                .ok_or("PulseAudio capture stream")?,
-            )),
+            stream: Rc::new(RefCell::new(stream)),
             module,
             follows,
             muted: Rc::default(),
@@ -121,15 +121,16 @@ impl Capture {
             fault: Arc::default(),
             resolved,
         };
-        let connected = capture.connect(server, &device, wake);
-        if let Err(error) = connected {
+        let opened = capture.connect(server, &device, wake).and_then(|()| {
+            if follows {
+                capture.follow(server.default_sink()?);
+            }
+            Ok(())
+        });
+        if let Err(error) = opened {
             capture.close(server);
             server.finish();
             return Err(error);
-        }
-        if follows {
-            let default = server.default_sink()?;
-            capture.follow(default);
         }
         Ok(capture)
     }
