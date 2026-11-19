@@ -18,6 +18,7 @@
     <string name="action_show">Show</string>
     <string name="action_hide">Hide</string>
     <string name="action_more">More</string>
+    <string name="action_open_settings">Open Settings</string>
     <string name="unavailable">Unavailable</string>
 
     <!-- Home and computers -->
@@ -25,6 +26,8 @@
     <string name="home_add_body">Install Litz on your computer and connect both devices to the same network. Then pick your computer below.</string>
     <string name="computers_yours">Your computers</string>
     <string name="computer_using_now">Using now</string>
+    <string name="usb_hint">To use a cable instead of Wi-Fi, plug in the phone and turn on USB tethering.</string>
+    <string name="usb_find_it">Search Settings for “USB” and turn on USB tethering. It\'s usually under Network or Connections.</string>
     <string name="computer_tap_to_switch">Tap to switch</string>
     <string name="computer_change">Change computer</string>
     <string name="computer_forget">Forget this computer</string>

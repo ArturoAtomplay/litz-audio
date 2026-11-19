@@ -87,7 +87,7 @@ With both the microphone and Listen on, the microphone picks up whatever the pho
 
 ## Audio cuts out or sounds choppy
 
-It's almost always the Wi-Fi. Get closer to the router, switch to 5 GHz, or plug the phone in by USB and turn on USB tethering. While you test, **Settings → About → Diagnostics** shows dropped and late packets.
+It's almost always the Wi-Fi. Get closer to the router, switch to 5 GHz, or plug the phone in by USB and turn on USB tethering. While you're on Wi-Fi, **Open Settings** on the computer card in Litz takes you to that switch. To have it turn on by itself every time you plug in, open **Developer options** on the phone and set **Default USB configuration** to **USB tethering**. While you test, **Settings → About → Diagnostics** shows dropped and late packets.
 
 ## Only one phone at a time
 

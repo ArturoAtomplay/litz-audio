@@ -220,7 +220,7 @@ private fun ComputerCard(
         status.state == SessionState.RECONNECTING ||
             (ui.session.pending && !status.connected && (!ui.quiet || nearby != null))
     val usb by
-        produceState(false, status.endpoint) {
+        produceState<Boolean?>(null, status.endpoint) {
             value =
                 status.endpoint?.let { endpoint ->
                     withContext(Dispatchers.IO) {
@@ -237,7 +237,7 @@ private fun ComputerCard(
                     MaterialTheme.colorScheme.tertiary
             status.connected ->
                 stringResource(
-                    if (usb) R.string.status_connected_usb else R.string.status_connected
+                    if (usb == true) R.string.status_connected_usb else R.string.status_connected
                 ) to MaterialTheme.colorScheme.primary
             connecting ->
                 stringResource(R.string.status_connecting) to MaterialTheme.colorScheme.tertiary
@@ -300,6 +300,7 @@ private fun ComputerCard(
                 Canvas(Modifier.size(8.dp)) { drawCircle(color) }
                 Text(line, style = MaterialTheme.typography.bodyMedium)
             }
+            if (status.connected && usb == false) UsbTetherHint()
             if (!status.connected && !connecting) {
                 Text(
                     when {
@@ -820,6 +821,23 @@ private fun ChoiceCard(name: String, state: String, enabled: Boolean, action: ()
         shape = RoundedCornerShape(24.dp),
     ) {
         SettingValue(name, state, enabled = enabled)
+    }
+}
+
+@Composable
+private fun UsbTetherHint() {
+    val context = LocalContext.current
+    var lost by rememberSaveable { mutableStateOf(false) }
+    Row(Modifier.padding(top = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            stringResource(if (lost) R.string.usb_find_it else R.string.usb_hint),
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        TextButton(onClick = { lost = !UsbTether.open(context) }) {
+            Text(stringResource(R.string.action_open_settings))
+        }
     }
 }
 

@@ -87,7 +87,7 @@ Con el micrófono y Escuchar activados a la vez, el micrófono capta lo que suen
 
 ## El audio se corta o suena entrecortado
 
-Casi siempre es el Wi-Fi. Acércate al router, cámbiate a 5 GHz o conecta el teléfono por USB y activa el anclaje USB. Mientras pruebas, **Ajustes → Acerca de → Diagnóstico** muestra los paquetes perdidos y los que llegan tarde.
+Casi siempre es el Wi-Fi. Acércate al router, cámbiate a 5 GHz o conecta el teléfono por USB y activa el anclaje USB. Mientras estés por Wi-Fi, **Abrir Ajustes** en la tarjeta de la computadora en Litz te lleva a ese interruptor. Para que se active solo cada vez que conectes el cable, entra en las **Opciones para desarrolladores** del teléfono y elige el anclaje USB como configuración USB predeterminada. Mientras pruebas, **Ajustes → Acerca de → Diagnóstico** muestra los paquetes perdidos y los que llegan tarde.
 
 ## Solo un teléfono a la vez
 

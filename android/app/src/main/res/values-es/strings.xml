@@ -15,6 +15,7 @@
     <string name="action_show">Mostrar</string>
     <string name="action_hide">Ocultar</string>
     <string name="action_more">Más</string>
+    <string name="action_open_settings">Abrir Ajustes</string>
     <string name="unavailable">No disponible</string>
 
     <!-- Home and computers -->
@@ -22,6 +23,8 @@
     <string name="home_add_body">Instala Litz en tu computadora y conecta ambos dispositivos a la misma red. Luego elige tu computadora abajo.</string>
     <string name="computers_yours">Tus computadoras</string>
     <string name="computer_using_now">En uso ahora</string>
+    <string name="usb_hint">Para usar cable en vez de Wi-Fi, conecta el teléfono y activa el anclaje USB.</string>
+    <string name="usb_find_it">Busca «USB» en Ajustes y activa el anclaje USB. Suele estar en Redes o en Conexiones.</string>
     <string name="computer_tap_to_switch">Toca para cambiar</string>
     <string name="computer_change">Cambiar de computadora</string>
     <string name="computer_forget">Olvidar esta computadora</string>
