@@ -135,9 +135,12 @@ pub async fn run(
     let mut stream = Streaming::new(c, control, ports, hub, advertised);
     let result = stream.serve().await;
     stream.ports.reset.store(true, Ordering::Release);
-    if let Some(worker) = stream.voice.take() {
-        tokio::task::spawn_blocking(move || drop(worker)).await?;
-    }
+    let next = match stream.voice_change.take() {
+        Some(VoiceChange::Committing { next, .. }) => next,
+        _ => None,
+    };
+    let workers = [stream.voice.take(), next];
+    tokio::task::spawn_blocking(move || drop(workers)).await?;
     result
 }
 
