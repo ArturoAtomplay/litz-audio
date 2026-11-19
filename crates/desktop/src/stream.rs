@@ -392,27 +392,19 @@ impl<'a> Streaming<'a> {
                 }),
                 RouteDone::Apply(applied),
             ) => {
-                let applied = match applied? {
-                    Some((next, persisted)) => {
-                        install_capture(self.ports, route, next);
-                        self.ports.revision = self
-                            .ports
-                            .revision
-                            .checked_add(1)
-                            .ok_or("settings revision exhausted")?;
-                        if let Err(error) = &persisted {
-                            eprintln!(
-                                "litzd: route applied but settings persistence failed: {error}"
-                            );
-                        }
-                        persisted.is_ok()
-                    }
-                    None => false,
-                };
-                self.session.revision = self.ports.revision;
-                if !applied {
+                let Some((next, persisted)) = applied? else {
                     return self.error(request_id, Code::RouteConflict).await;
+                };
+                if let Err(error) = persisted {
+                    eprintln!("litzd: route applied but settings persistence failed: {error}");
                 }
+                install_capture(self.ports, route, next);
+                self.ports.revision = self
+                    .ports
+                    .revision
+                    .checked_add(1)
+                    .ok_or("settings revision exhausted")?;
+                self.session.revision = self.ports.revision;
                 self.captured_frames = 0;
                 self.sender = MediaSender::default();
                 self.reply(request_id, self.status()).await
