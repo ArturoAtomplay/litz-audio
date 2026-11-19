@@ -1,8 +1,13 @@
-# Litz Audio
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.svg">
+  <img alt="Litz Audio" src="docs/images/banner-light.svg" width="100%">
+</picture>
 
-Low-latency audio over LAN between a PC and an Android phone.
+English | [Español](README.es.md)
 
-Use your phone as a microphone on Linux or Windows, and listen to your computer's audio on the phone. The computer runs a small background service, `litzd`; the Android app connects to it over your local network.
+Litz turns an Android phone into a microphone for a Linux or Windows PC. It also works the other way: you can listen to the computer's audio on the phone. Everything goes over your local network, or a USB cable if you prefer.
+
+On the computer it's a small background service called `litzd`. The phone app finds it and connects.
 
 <table align="center">
   <tr>
@@ -15,45 +20,55 @@ Use your phone as a microphone on Linux or Windows, and listen to your computer'
   </tr>
 </table>
 
-Litz is early software. Expect rough edges, especially on Windows.
-
-[![Support Litz on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/arturoatomplay)
+Litz is still young and you'll probably hit bugs, more so on Windows. If you do, please [open an issue](https://github.com/ArturoAtomplay/litz-audio/issues).
 
 ## Install
 
-**Linux** (PipeWire 1.0 or newer, or PulseAudio):
+### Linux
+
+You need PipeWire 1.0 or newer, or PulseAudio.
 
 ```sh
 curl -fsSL https://github.com/ArturoAtomplay/litz-audio/releases/latest/download/install.sh | sh
 ```
 
-This installs Litz into `~/.local` and starts it at login. No root needed. There are also `.deb` and `.rpm` packages on the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases), and this repository's flake provides a NixOS module (`services.litz-audio.enable = true`). With a package, start the service once:
+The script installs Litz into `~/.local` and starts it when you log in. It doesn't need root.
+
+If you'd rather use a package, there are `.deb` and `.rpm` files on the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). After installing one, start the service once:
 
 ```sh
 systemctl --user enable --now litzd
 ```
 
-**Windows**: run the installer from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). To use the phone as a microphone you also need [VB-CABLE](https://vb-audio.com/Cable/).
+On NixOS, the flake in this repo has a module: `services.litz-audio.enable = true`.
 
-**Android**: install the APK from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases).
+### Windows
+
+Run the installer from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases). To use the phone as a microphone you also need [VB-CABLE](https://vb-audio.com/Cable/). Listening to the PC on the phone works without it.
+
+### Android
+
+Install the APK from the [releases page](https://github.com/ArturoAtomplay/litz-audio/releases).
 
 ## Usage
 
-1. Connect the phone and computer to the same network.
+1. Put the phone and the computer on the same network.
 2. Open Litz on the phone and tap your computer.
-3. Click **Allow** on the computer.
+3. Click Allow on the computer.
 
-That's it; the phone reconnects on its own from then on. In your calling app, pick **Litz Microphone** (Linux) or **CABLE Output** (Windows) as the microphone.
+Both screens show the same six-digit code while pairing. Only allow it if they match. After the first time, the phone reconnects by itself.
 
-If the phone can't find the computer, use **Pair by IP address**, and make sure your firewall allows UDP port 47165 and mDNS (UDP 5353). USB tethering works too. For anything else, see [Troubleshooting](docs/troubleshooting.md).
+In Discord, Zoom or whatever you call with, pick **Litz Microphone** (Linux) or **CABLE Output** (Windows) as the microphone.
 
-With the microphone on, the computer also hears whatever the phone's own speaker plays. Headphones avoid that with no loss in quality. Without them, the **Calls and meetings** recording mode in Settings uses the phone's own echo cancellation when it has one; Android then processes your voice as it does in a call.
+If the phone doesn't see the computer, try **Pair by IP address**, and check that your firewall lets through UDP port 47165 and mDNS (UDP 5353). USB tethering works too. More help is in [Troubleshooting](docs/troubleshooting.md).
 
-When a phone pairs, both screens show the same six-digit code; allow it only if they match. To see or remove paired phones on the computer, run `litzd devices` or `litzd forget NAME`.
+With the microphone on, the PC also hears whatever comes out of the phone's speaker. Headphones fix that. Without them, the **Calls and meetings** recording mode in Settings uses the phone's echo cancellation if it has one, which makes Android treat your voice like a phone call.
+
+To see or remove paired phones from the computer, run `litzd devices` or `litzd forget NAME`.
 
 ## Building
 
-You need Rust (version pinned in `rust-toolchain.toml`), and on Linux the PipeWire and PulseAudio headers, `pkg-config` and `libclang`. With Nix, `nix develop` provides everything.
+You need Rust (the version is pinned in `rust-toolchain.toml`). On Linux you also need the PipeWire and PulseAudio headers, `pkg-config` and `libclang`. With Nix, `nix develop` gives you all of it.
 
 ```sh
 packaging/fetch-model.sh target/model    # DeepFilterNet model, for tests
@@ -62,7 +77,7 @@ cargo build --release -p litzd
 cargo test -p litz-core -p litzd
 ```
 
-The Android app is in `android/` and needs JDK 17, the Android SDK and NDK, and `cargo-ndk` (`nix develop .#android` sets these up):
+The Android app lives in `android/`. It needs JDK 17, the Android SDK and NDK, and `cargo-ndk`. `nix develop .#android` sets them up.
 
 ```sh
 android/gradlew -p android :app:assembleFossDebug   # no ads, no proprietary libraries
@@ -71,8 +86,10 @@ android/gradlew -p android :app:assemblePlayDebug   # Google Play version, shows
 
 ## Support
 
-Litz is free and developed in spare time. If it is useful to you, a donation on [Ko-fi](https://ko-fi.com/arturoatomplay) helps cover devices for testing and keeps the project going. Bug reports and device test results help just as much.
+I work on Litz in my spare time. If it's useful to you, you can buy me a coffee on [Ko-fi](https://ko-fi.com/arturoatomplay). The money goes to phones for testing. Bug reports and results from your device help just as much.
 
 ## License
 
-GPL-3.0-or-later, with an additional permission to link the Google Mobile Ads SDK in the Google Play version. See [LICENSE](LICENSE), [LICENSE-EXCEPTION](LICENSE-EXCEPTION) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Privacy policy: [PRIVACY.md](PRIVACY.md). To report a vulnerability, see [SECURITY.md](SECURITY.md). To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md).
+GPL-3.0-or-later, with an extra permission to link the Google Mobile Ads SDK in the Google Play version. See [LICENSE](LICENSE), [LICENSE-EXCEPTION](LICENSE-EXCEPTION) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+
+Also: [privacy policy](PRIVACY.md), [reporting a vulnerability](SECURITY.md), [contributing](CONTRIBUTING.md).

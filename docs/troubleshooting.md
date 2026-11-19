@@ -1,100 +1,101 @@
 # Troubleshooting
 
-Most problems are the network or the firewall, so start there.
+English | [Español](troubleshooting.es.md)
+
+Almost every problem comes down to the network or the firewall, so check those first.
 
 ## The phone doesn't find the computer
 
-Check that Litz is running on the computer. On Linux:
+First make sure Litz is running on the computer. On Linux:
 
 ```sh
 systemctl --user status litzd
 ```
 
-On Windows, look for `litzd.exe` in Task Manager. It starts at sign-in; if it isn't there, open a terminal and run `litzdw`.
+On Windows, look for `litzd.exe` in Task Manager. It starts when you sign in. If it's not there, open a terminal and run `litzdw`.
 
-Then check the network:
+If it's running, look at the network:
 
-- Both devices have to be on the same network. A guest Wi-Fi, or a router with "client isolation" or "AP isolation" turned on, keeps devices from seeing each other.
-- A VPN on the phone or the computer can hide one from the other. Turn it off, or allow local network traffic in its settings.
-- The phone finds computers with mDNS (UDP port 5353). If your firewall blocks it, the computer never shows up under **Nearby**.
+- The phone and the computer have to be on the same network. Guest Wi-Fi won't work, and neither will a router with "client isolation" or "AP isolation" turned on, because both stop devices from seeing each other.
+- A VPN on either device can hide one from the other. Turn it off, or allow local network traffic in its settings.
+- The phone finds computers with mDNS (UDP port 5353). If the firewall blocks it, the computer never shows up under **Nearby**.
 
-If the computer still doesn't appear, tap **Pair by IP address** in the app and type the computer's local address, such as `192.168.1.20`. That skips discovery.
+Still nothing? Tap **Pair by IP address** in the app and type the computer's local address, something like `192.168.1.20`. That skips discovery entirely.
 
 ## "Found on your network, but not answering"
 
-Discovery works, but the firewall is dropping the audio port. Allow UDP 47165 on the computer.
+The phone can see the computer, but the firewall is blocking the audio port. Allow UDP 47165 on the computer.
 
-**Ubuntu** uses ufw. Run `sudo ufw status` first: if it says inactive, the firewall isn't the problem.
+Ubuntu uses ufw. Run `sudo ufw status` first. If it says inactive, the firewall isn't your problem.
 
 ```sh
 sudo ufw allow 47165/udp
 sudo ufw allow 5353/udp
 ```
 
-**Fedora** comes with firewalld turned on:
+Fedora comes with firewalld turned on:
 
 ```sh
 sudo firewall-cmd --permanent --add-port=47165/udp --add-service=mdns
 sudo firewall-cmd --reload
 ```
 
-**Arch Linux** installs no firewall of its own. If you set up ufw or firewalld, use the commands above. With the stock `/etc/nftables.conf`, add this line to the `input` chain and run `sudo systemctl restart nftables`:
+Arch Linux doesn't install a firewall by default. If you set up ufw or firewalld, use the commands above. If you use the stock `/etc/nftables.conf`, add this line to the `input` chain and run `sudo systemctl restart nftables`:
 
 ```
 udp dport { 5353, 47165 } accept
 ```
 
-**NixOS**: `services.litz-audio.enable = true` opens the port for you.
+On NixOS, `services.litz-audio.enable = true` already opens the port.
 
-On Windows, allow `litzd.exe` on private networks in **Windows Security → Firewall & network protection → Allow an app through firewall**. Also check that your Wi-Fi is set as a private network, not a public one.
+On Windows, go to **Windows Security → Firewall & network protection → Allow an app through firewall** and allow `litzd.exe` on private networks. Also check that your Wi-Fi is set as a private network and not a public one.
 
 ## The pairing prompt doesn't show up on the computer
 
-The prompt is a desktop notification with **Allow** and **Deny** buttons. If the phone says the computer could not show it:
+The prompt is a desktop notification with **Allow** and **Deny** buttons. If the phone says the computer couldn't show it, turn off Do Not Disturb and make sure notifications are on for Litz Audio.
 
-- turn off Do Not Disturb, and turn notifications on for Litz Audio;
-- on a bare window manager, run a notification daemon that supports action buttons, such as dunst or mako.
+If you use a bare window manager, you need a notification daemon that supports action buttons, like dunst or mako.
 
 ## "This computer no longer trusts this phone"
 
-The phone was removed on the computer with `litzd forget`. Pair it again from the Computers screen.
+Someone removed the phone on the computer with `litzd forget`. Pair it again from the **Computers** screen.
 
 ## "This computer's identity changed"
 
-The computer has a new key, which happens when Litz's data on it was deleted or the system was reinstalled. If you did that, pair again. If you didn't, something else on your network is answering under that computer's name, so don't pair.
+The computer has a new key. That happens when Litz's data on it was deleted or the system was reinstalled. If you did that, just pair again. If you didn't, something else on your network is answering with that computer's name, so don't pair.
 
 ## "Update Litz on both your phone and computer"
 
-The app and `litzd` are from versions that can't talk to each other. Install the latest release on both.
+The app and `litzd` are on versions that can't talk to each other. Install the latest release on both.
 
 ## Apps on the computer don't hear the phone
 
-Pick the right microphone in the app you are calling or recording with:
+In the app you're calling or recording with, pick the right microphone:
 
 - Linux: **Litz Microphone**
-- Windows: **CABLE Output**, which needs [VB-CABLE](https://vb-audio.com/Cable/) installed. Without it the phone says the computer has no virtual microphone.
+- Windows: **CABLE Output**. This needs [VB-CABLE](https://vb-audio.com/Cable/). Without it, the phone tells you the computer has no virtual microphone.
 
 Also check that **Mute** is off in the Litz app.
 
 ## Listen is on but the phone is silent
 
-Open **Sound from** on the home screen and choose the output that is actually playing. **Default output** follows whatever the computer is using.
+On the home screen, open **Sound from** and pick the output that's actually playing. **Default output** follows whatever the computer is using.
 
-## The computer hears the phone's own speaker
+## The computer hears the phone's speaker
 
-With the microphone and Listen both on, the microphone picks up what the phone plays. Headphones fix it. Without headphones, set **Settings → Recording mode** to **Calls and meetings**, which uses the phone's echo cancellation when it has one.
+With both the microphone and Listen on, the microphone picks up whatever the phone plays. Headphones fix it. If you don't have any, go to **Settings → Recording mode** and choose **Calls and meetings**, which uses the phone's echo cancellation if it has one.
 
 ## Audio cuts out or sounds choppy
 
-That is nearly always Wi-Fi. Move closer to the router, use the 5 GHz band, or connect the phone by USB and turn on USB tethering. **Settings → About → Diagnostics** shows dropped and late packets while you test.
+It's almost always the Wi-Fi. Get closer to the router, switch to 5 GHz, or plug the phone in by USB and turn on USB tethering. While you test, **Settings → About → Diagnostics** shows dropped and late packets.
 
 ## Only one phone at a time
 
-A computer streams with one phone. Turning on the microphone or Listen on a second paired phone moves the audio to it.
+A computer streams with one phone at a time. If you turn on the microphone or Listen on a second paired phone, the audio moves to that one.
 
 ## Still stuck
 
-Open an [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) with the report from **Settings → About → Diagnostics**. On Linux, add the service log:
+Open an [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) and paste the report from **Settings → About → Diagnostics**. On Linux, add the service log too:
 
 ```sh
 journalctl --user -u litzd -e
