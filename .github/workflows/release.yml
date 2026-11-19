@@ -3,7 +3,7 @@ on:
   push:
     tags: ['v*']
 permissions:
-  contents: write
+  contents: read
 env:
   LITZ_DATA_DIR: ${{ github.workspace }}/target/model
 jobs:
@@ -112,6 +112,8 @@ jobs:
   publish:
     needs: [linux, windows, android]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
