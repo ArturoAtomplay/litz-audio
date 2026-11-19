@@ -209,7 +209,14 @@ pub async fn serve(hub: Arc<Hub>) -> Result<()> {
     // SAFETY: getuid has no preconditions and cannot fail.
     let user = unsafe { libc::getuid() };
     loop {
-        let (stream, _) = listener.accept().await?;
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) => {
+                eprintln!("litzd: devices socket: {error}");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         if stream.peer_cred().is_ok_and(|peer| peer.uid() == user) {
             spawn_handler(stream, &hub);
         }
@@ -415,9 +422,13 @@ pub async fn serve(hub: Arc<Hub>) -> Result<()> {
     let name = user.pipe();
     let mut server = descriptor.create(&name, true)?;
     loop {
-        server.connect().await?;
+        let connected = server.connect().await;
         let next = descriptor.create(&name, false)?;
-        spawn_handler(std::mem::replace(&mut server, next), &hub);
+        let client = std::mem::replace(&mut server, next);
+        match connected {
+            Ok(()) => spawn_handler(client, &hub),
+            Err(error) => eprintln!("litzd: devices pipe: {error}"),
+        }
     }
 }
 
