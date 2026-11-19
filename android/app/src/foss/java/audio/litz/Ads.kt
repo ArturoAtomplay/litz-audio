@@ -7,8 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,9 +18,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,12 +58,13 @@ internal fun AdBanner() {
             Row(
                 Modifier.fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+                    .heightIn(min = 64.dp)
+                    .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(36.dp)
+                    Modifier.size(32.dp)
                         .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -69,13 +72,14 @@ internal fun AdBanner() {
                         painterResource(R.drawable.ic_support),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(18.dp),
                     )
                 }
                 Column(Modifier.weight(1f)) {
                     Text(
                         stringResource(R.string.support_title),
                         style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
                         stringResource(R.string.support_body),
@@ -83,16 +87,26 @@ internal fun AdBanner() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                FilledTonalButton(onClick = { uriHandler.openUri(SUPPORT_URL) }) {
-                    Text(stringResource(R.string.support_action))
-                }
-                TextButton(
-                    onClick = {
-                        prefs.edit { putLong("snoozed_at", System.currentTimeMillis()) }
-                        visible = false
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilledTonalButton(
+                        onClick = { uriHandler.openUri(SUPPORT_URL) },
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                    ) {
+                        Text(stringResource(R.string.support_action))
                     }
-                ) {
-                    Text(stringResource(R.string.support_later))
+                    IconButton(
+                        onClick = {
+                            prefs.edit { putLong("snoozed_at", System.currentTimeMillis()) }
+                            visible = false
+                        }
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_close),
+                            contentDescription = stringResource(R.string.support_later),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
