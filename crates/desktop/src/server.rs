@@ -253,7 +253,7 @@ async fn serve_connection(
             Message::Release {} => hub.status(c),
             Message::Capabilities { .. } => {
                 let desktop = if let Ok(mut available) = ports.try_lock() {
-                    Some(desktop_routes(&mut available).await?)
+                    Some(desktop_routes(&mut available).await)
                 } else {
                     None
                 };
@@ -443,9 +443,17 @@ pub fn inventory(ports: &Ports) -> Pending<Vec<Endpoint>> {
     command(ports, CaptureOperation::Inventory, Duration::from_secs(3))
 }
 
-pub async fn desktop_routes(ports: &mut Ports) -> transport::Result<DesktopRoutes> {
-    let endpoints = inventory(ports).await?;
-    Ok(routes(ports, endpoints))
+pub async fn desktop_routes(ports: &mut Ports) -> DesktopRoutes {
+    let endpoints = listed(inventory(ports).await, Vec::new());
+    routes(ports, endpoints)
+}
+
+/// A slow or failed inventory keeps `last` rather than ending the session.
+pub fn listed(inventory: transport::Result<Vec<Endpoint>>, last: Vec<Endpoint>) -> Vec<Endpoint> {
+    inventory.unwrap_or_else(|error| {
+        eprintln!("litzd: output inventory failed: {error}");
+        last
+    })
 }
 
 pub fn routes(ports: &Ports, endpoints: Vec<Endpoint>) -> DesktopRoutes {

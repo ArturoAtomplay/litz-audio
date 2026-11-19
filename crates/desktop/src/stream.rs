@@ -2,7 +2,7 @@ use crate::audio::voice::Worker;
 use crate::pairing::Hub;
 use crate::server::{
     CaptureRoute, Pending, Ports, capture_active, desktop_routes, install_capture, inventory,
-    open_capture, routes,
+    listed, open_capture, routes,
 };
 use litz_core::{
     media::{
@@ -131,7 +131,7 @@ pub async fn run(
     ports: &mut Ports,
     hub: &Arc<Hub>,
 ) -> Result<Exit> {
-    let advertised = desktop_routes(ports).await?;
+    let advertised = desktop_routes(ports).await;
     let mut stream = Streaming::new(c, control, ports, hub, advertised);
     let result = stream.serve().await;
     stream.ports.reset.store(true, Ordering::Release);
@@ -378,7 +378,8 @@ impl<'a> Streaming<'a> {
     async fn route_finished(&mut self, done: RouteDone) -> Result<()> {
         match (self.route_work.take(), done) {
             (Some(RouteWork::Inventory { request_id, .. }), RouteDone::Inventory(endpoints)) => {
-                self.advertised = routes(self.ports, endpoints?);
+                let last = std::mem::take(&mut self.advertised.endpoints);
+                self.advertised = routes(self.ports, listed(endpoints, last));
                 self.advertised.voice_runtime = self.voice_runtime();
                 self.reply(request_id, self.capabilities()).await
             }
@@ -909,6 +910,26 @@ mod tests {
             CaptureOperation::Inventory(reply) => drop(reply.send(Vec::new())),
             CaptureOperation::Route(_, reply) => drop(reply.send(None)),
         })
+    }
+
+    #[tokio::test]
+    async fn a_failed_output_listing_still_answers_the_phone() -> Result<()> {
+        let ports = ports(audio_thread(|operation| match operation {
+            CaptureOperation::Active(_, reply) => drop(reply.send(true)),
+            CaptureOperation::Inventory(reply) => drop(reply),
+            CaptureOperation::Route(_, reply) => drop(reply.send(None)),
+        }))?;
+        let (_client, mut control) = phone(ports).await?;
+        control
+            .write(&Record::new(1, Message::Capabilities { desktop: None }))
+            .await?;
+        let reply = tokio::time::timeout(Duration::from_secs(5), control.read()).await??;
+        assert_eq!(reply.request_id, 1);
+        assert!(matches!(
+            reply.message,
+            Message::Capabilities { desktop: Some(_) }
+        ));
+        Ok(())
     }
 
     async fn pushed(control: &mut Control) -> Result<Message> {
