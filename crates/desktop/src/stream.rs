@@ -576,7 +576,6 @@ impl<'a> Streaming<'a> {
             return error(Code::Busy);
         }
         if self.session.running[1].is_some() {
-            self.session.revision = self.ports.revision;
             return error(Code::RouteConflict);
         }
         let saved = crate::settings::Settings {
