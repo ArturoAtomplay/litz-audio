@@ -208,7 +208,7 @@ class SessionService : Service() {
                 var endpoint = usbLink.value.endpoint
                 if (saved != null && found != null) {
                     if (endpoint != (saved.fingerprint to found)) {
-                        if (streaming && interfaces.none { it.subnet.contains(saved.endpoint) })
+                        if (interfaces.none { it.subnet.contains(saved.endpoint) })
                             wifiFallback = saved.endpoint
                         endpoint = saved.fingerprint to found
                         lastUsbAttempt = 0L
@@ -220,7 +220,7 @@ class SessionService : Service() {
                             address(found)
                         }
                     }
-                    if (streaming && mutable.value.status?.connectedEndpoint != found) {
+                    if (mutable.value.status?.connectedEndpoint != found) {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastUsbAttempt >= 5000L) {
                             lastUsbAttempt = now
@@ -233,7 +233,7 @@ class SessionService : Service() {
                         }
                 } else if (interfaces.isEmpty() && endpoint != null) {
                     endpoint = null
-                    if (streaming && saved != null)
+                    if (saved != null)
                         wifiFallback?.let { fallback ->
                             withContext(Dispatchers.IO) {
                                 IdentityStore(this@SessionService)

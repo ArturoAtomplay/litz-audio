@@ -1302,14 +1302,10 @@ impl Supervisor {
             .connected
             .as_ref()
             .is_some_and(|c| c.media.connection.remote_address() != endpoint);
-        if !self.active() {
-            if elsewhere {
-                self.connected = None;
-            }
-        } else if elsewhere {
+        if elsewhere {
             let candidate = self.identity.clone();
             self.handoff = Some((endpoint, Box::pin(async move { connect(&candidate).await })));
-        } else if self.connected.is_none() {
+        } else if self.active() && self.connected.is_none() {
             self.attempt = 0;
             self.retry = Some(tokio::time::Instant::now());
         }
@@ -1396,13 +1392,22 @@ impl Supervisor {
         let Some((target, _)) = self.handoff.take() else {
             return;
         };
-        if target != self.identity.endpoint || !self.active() {
+        let already = self
+            .connected
+            .as_ref()
+            .is_some_and(|c| c.media.connection.remote_address() == target);
+        if target != self.identity.endpoint || already {
             return;
         }
         let Ok(mut replacement) = result else {
             return;
         };
         self.connected = None;
+        if !self.active() {
+            replacement.media.settings = self.desired.clone();
+            self.connected(replacement);
+            return;
+        }
         match replacement.apply(&self.desired).await {
             Ok(()) => self.connected(replacement),
             Err(e) => self.lost(&e, false),
@@ -1567,6 +1572,87 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One computer answering at two addresses, as over Wi-Fi and USB.
+    fn computer() -> Result<(Identity, [SocketAddr; 2])> {
+        let desktop = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
+        let phone = rcgen::generate_simple_self_signed(vec!["litz.local".into()])?;
+        let mut addresses = [SocketAddr::from(([127, 0, 0, 1], 0)); 2];
+        for address in &mut addresses {
+            let server = transport::server_endpoint(
+                transport::server(
+                    desktop.cert.der().to_vec(),
+                    desktop.signing_key.serialize_der(),
+                )?,
+                *address,
+            )?;
+            *address = server.local_addr()?;
+            tokio::spawn(async move {
+                while let Some(incoming) = server.accept().await {
+                    tokio::spawn(answer(incoming));
+                }
+            });
+        }
+        let identity = Identity {
+            desktop: desktop.cert.der().to_vec(),
+            certificate: phone.cert.der().to_vec(),
+            private_key: phone.signing_key.serialize_der(),
+            endpoint: addresses[0],
+        };
+        Ok((identity, addresses))
+    }
+
+    async fn answer(incoming: quinn::Incoming) -> Result<()> {
+        let connection = incoming.await?;
+        let mut control = Control::new(connection.accept_bi().await?);
+        loop {
+            let request = control.read().await?;
+            let reply = match request.message {
+                Message::GetState {} => Message::Status {
+                    revision: 0,
+                    running: [None, None],
+                },
+                Message::GetOwnership {} => Message::Ownership {
+                    generation: 0,
+                    owner: None,
+                    owned: false,
+                },
+                Message::Capabilities { .. } => Message::Capabilities { desktop: None },
+                _ => return Err("unexpected request".into()),
+            };
+            control
+                .write(&Record::new(request.request_id, reply))
+                .await?;
+        }
+    }
+
+    fn remote(supervisor: &Supervisor) -> Option<SocketAddr> {
+        supervisor
+            .connected
+            .as_ref()
+            .map(|c| c.media.connection.remote_address())
+    }
+
+    #[tokio::test]
+    async fn an_idle_connection_keeps_its_route_until_the_new_one_answers() -> Result<()> {
+        let (identity, [wifi, usb]) = computer()?;
+        let mut supervisor = Supervisor::new(identity);
+        let first = connect(&supervisor.identity).await?;
+        supervisor.connected(first);
+        supervisor.address(usb);
+        assert_eq!(remote(&supervisor), Some(wifi));
+        let result = supervisor
+            .handoff
+            .as_mut()
+            .ok_or("no handoff")?
+            .1
+            .as_mut()
+            .await;
+        supervisor.handed_off(result).await;
+        assert_eq!(remote(&supervisor), Some(usb));
+        assert!(supervisor.handoff.is_none() && supervisor.error.is_none());
+        Ok(())
+    }
 
     #[test]
     fn unmute_reuses_duplex_audio_without_a_microphone_encoder() {
