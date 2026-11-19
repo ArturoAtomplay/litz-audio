@@ -68,6 +68,14 @@ struct Level {
     inactive_frames: u16,
 }
 impl Level {
+    fn new(automatic: bool) -> Self {
+        Self {
+            automatic,
+            gain_db: 0.0,
+            limiter: 1.0,
+            inactive_frames: 0,
+        }
+    }
     fn process(&mut self, samples: &mut [f32; FRAME], periodicity: f32) {
         let rms = (samples.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
         let speech = self.automatic && rms > 0.001 && periodicity > 0.55;
@@ -222,12 +230,13 @@ pub(super) struct Pipeline {
     eq_target: [Biquad; 3],
     settling: usize,
 }
+fn equalizer(db: [i8; 3]) -> [Biquad; 3] {
+    std::array::from_fn(|i| Biquad::peak([200.0, 1200.0, 5000.0][i], db[i]))
+}
 impl Pipeline {
     fn configure(&mut self, settings: VoiceSettings) {
         if settings.eq_db != self.settings.eq_db {
-            self.eq_target = std::array::from_fn(|i| {
-                Biquad::peak([200.0, 1200.0, 5000.0][i], settings.eq_db[i])
-            });
+            self.eq_target = equalizer(settings.eq_db);
             self.settling = 2400; // 50 ms coefficient ramp; retain delay state.
         }
         self.level.automatic = settings.auto_level;
@@ -239,17 +248,10 @@ impl Pipeline {
     pub(super) fn reset(&mut self, settings: VoiceSettings) -> Result<()> {
         self.settings = settings;
         self.settling = 0;
-        self.eq_target =
-            std::array::from_fn(|i| Biquad::peak([200.0, 1200.0, 5000.0][i], settings.eq_db[i]));
+        self.eq_target = equalizer(settings.eq_db);
         self.noise.reset(settings.suppression)?;
-        self.eq =
-            std::array::from_fn(|i| Biquad::peak([200.0, 1200.0, 5000.0][i], settings.eq_db[i]));
-        self.level = Level {
-            automatic: settings.auto_level,
-            gain_db: 0.0,
-            limiter: 1.0,
-            inactive_frames: 0,
-        };
+        self.eq = equalizer(settings.eq_db);
+        self.level = Level::new(settings.auto_level);
         self.gate = Gate::default();
         self.previous_input = [0.0; FRAME];
         Ok(())
@@ -258,19 +260,10 @@ impl Pipeline {
         Ok(Self {
             settings,
             settling: 0,
-            eq_target: std::array::from_fn(|i| {
-                Biquad::peak([200.0, 1200.0, 5000.0][i], settings.eq_db[i])
-            }),
+            eq_target: equalizer(settings.eq_db),
             noise: suppression::Processor::try_new(settings.suppression)?,
-            eq: std::array::from_fn(|i| {
-                Biquad::peak([200.0, 1200.0, 5000.0][i], settings.eq_db[i])
-            }),
-            level: Level {
-                automatic: settings.auto_level,
-                gain_db: 0.0,
-                limiter: 1.0,
-                inactive_frames: 0,
-            },
+            eq: equalizer(settings.eq_db),
+            level: Level::new(settings.auto_level),
             gate: Gate::default(),
             previous_input: [0.0; FRAME],
         })
