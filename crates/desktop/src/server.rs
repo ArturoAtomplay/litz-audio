@@ -14,7 +14,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -126,12 +126,11 @@ async fn listen(
     mut stop: oneshot::Receiver<()>,
 ) -> transport::Result<()> {
     crate::platform::raise_thread_priority().await;
-    let trust = Arc::new(RwLock::new(identity.trust.clone()));
     let config = transport::server(identity.certificate.clone(), identity.private_key.clone())?;
     let endpoint = transport::server_endpoint(config, identity.bind)?;
     eprintln!("litzd: secure engine listening on {} (UDP)", identity.bind);
     let identity = Arc::new(std::sync::Mutex::new(identity));
-    let hub = Hub::new(identity.clone(), trust.clone(), path.clone());
+    let hub = Hub::new(identity.clone(), path.clone());
     let commands = tokio::spawn({
         let hub = hub.clone();
         async move {
@@ -538,10 +537,9 @@ mod tests {
                 registry_version: 1,
                 certificate: cert.clone(),
                 private_key: key.clone(),
-                trust: paired.clone(),
+                trust: paired,
                 bind: "127.0.0.1:0".parse()?,
             })),
-            Arc::new(RwLock::new(paired)),
             PathBuf::from("never-written"),
         );
         let ports = Arc::new(tokio::sync::Mutex::new(ports()?));

@@ -833,7 +833,6 @@ mod tests {
                 trust: Trust::default(),
                 bind: "127.0.0.1:0".parse()?,
             })),
-            Arc::default(),
             "never-written".into(),
         );
         let server = transport::server_endpoint(

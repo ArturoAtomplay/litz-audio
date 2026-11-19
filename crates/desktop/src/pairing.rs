@@ -4,7 +4,7 @@ use litz_core::session::Trust;
 use litz_core::transport;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 struct Owner {
@@ -38,7 +38,6 @@ fn now() -> u64 {
 
 pub struct Hub {
     identity: Arc<Mutex<Identity>>,
-    trust: Arc<RwLock<Trust>>,
     path: PathBuf,
     lease: Mutex<Lease>,
     attempts: Mutex<(Instant, u32)>,
@@ -48,14 +47,9 @@ pub struct Hub {
     connections: Mutex<Vec<(Vec<u8>, quinn::Connection)>>,
 }
 impl Hub {
-    pub fn new(
-        identity: Arc<Mutex<Identity>>,
-        trust: Arc<RwLock<Trust>>,
-        path: PathBuf,
-    ) -> Arc<Self> {
+    pub fn new(identity: Arc<Mutex<Identity>>, path: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             identity,
-            trust,
             path,
             lease: Mutex::new(Lease::default()),
             attempts: Mutex::new((Instant::now(), 0)),
@@ -101,18 +95,18 @@ impl Hub {
             .retain(|(_, c)| c.stable_id() != connection.stable_id());
     }
     pub fn trusted(&self, cert: &[u8]) -> bool {
-        !self.failed() && self.trust.read().unwrap().contains(cert)
+        !self.failed() && self.identity.lock().unwrap().trust.contains(cert)
     }
     pub fn trust(&self) -> Trust {
-        self.trust.read().unwrap().clone()
+        self.identity.lock().unwrap().trust.clone()
     }
     pub fn certificate(&self) -> Vec<u8> {
         self.identity.lock().unwrap().certificate.clone()
     }
     /// (certificate, name, last_seen) of the phone a new pairing would replace.
     pub fn replacement(&self) -> Option<(Vec<u8>, String, u64)> {
-        let trust = self.trust.read().unwrap();
-        let phone = trust.least_recent()?;
+        let identity = self.identity.lock().unwrap();
+        let phone = identity.trust.least_recent()?;
         Some((
             phone.certificate.clone(),
             phone.name.clone(),
@@ -149,7 +143,14 @@ impl Hub {
         .await
     }
     pub async fn touch(self: &Arc<Self>, cert: &[u8]) -> transport::Result<()> {
-        if self.trust.read().unwrap().touched(cert, now()).is_none() {
+        if self
+            .identity
+            .lock()
+            .unwrap()
+            .trust
+            .touched(cert, now())
+            .is_none()
+        {
             return Ok(());
         }
         let cert = cert.to_vec();
@@ -189,17 +190,14 @@ impl Hub {
             if let Err(error) = save(&hub.path, &next) {
                 if error.is::<identity::DurabilityUncertain>() {
                     hub.failed.store(true, Ordering::Release);
-                    *hub.trust.write().unwrap() = Trust::default();
+                    hub.identity.lock().unwrap().trust = Trust::default();
                     for (_, connection) in hub.connections.lock().unwrap().iter() {
                         connection.close(close::STORAGE, b"identity storage requires restart");
                     }
                 }
                 return Err(error.to_string().into());
             }
-            let mut identity = hub.identity.lock().unwrap();
-            *hub.trust.write().unwrap() = next.trust.clone();
-            *identity = next;
-            drop(identity);
+            *hub.identity.lock().unwrap() = next;
             if let Some(cert) = revoke {
                 hub.revoke(&cert);
             }
@@ -249,8 +247,8 @@ impl Hub {
         connection: &quinn::Connection,
         expected: Option<u64>,
     ) -> transport::Result<Message> {
-        // Same lock order as revocation: trust cannot disappear between checking
-        // authorization and publishing an owner.
+        // Held until the owner is published, so a concurrent forget either
+        // finds this owner to revoke or this check finds the phone gone.
         let identity = self.identity.lock().unwrap();
         if self.failed() || !identity.trust.contains(cert) {
             return Err("forgotten; pair again".into());
@@ -317,12 +315,11 @@ mod tests {
             trust: Trust::default(),
             bind: "127.0.0.1:0".parse()?,
         }));
-        let trust = Arc::new(RwLock::new(Trust::default()));
-        let hub = Hub::new(identity.clone(), trust.clone(), path.clone());
+        let hub = Hub::new(identity.clone(), path.clone());
         hub.approve(&one, "Phone one", None).await?;
         hub.approve(&two, "Phone two", None).await?;
         hub.approve(&one, "Duplicate", None).await?;
-        assert_eq!(trust.read().unwrap().phones.len(), 2);
+        assert_eq!(identity.lock().unwrap().trust.phones.len(), 2);
         let server = transport::server_endpoint(
             transport::server(cert.clone(), key)?,
             "127.0.0.1:0".parse()?,
@@ -432,11 +429,8 @@ mod tests {
         let restored: Identity =
             serde_json::from_slice(&crate::platform::unprotect(&std::fs::read(&path)?)?)?;
         assert!(restored.trust.contains(&one) && !restored.trust.contains(&two));
-        let failed = Hub::new(
-            identity,
-            Arc::new(RwLock::new(restored.trust)),
-            directory.join("missing/identity.json"),
-        );
+        identity.lock().unwrap().trust = restored.trust;
+        let failed = Hub::new(identity, directory.join("missing/identity.json"));
         assert!(failed.approve(&two, "Phone two", None).await.is_err());
         assert!(!failed.trusted(&two));
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
