@@ -375,7 +375,7 @@ async fn pair(
             Ok(()) => PairOutcome::Accepted,
             Err(error) => {
                 eprintln!("litzd: could not save approved phone “{name}”: {error}");
-                PairOutcome::Declined
+                PairOutcome::Cancelled
             }
         },
     };
