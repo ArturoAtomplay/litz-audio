@@ -90,7 +90,7 @@ internal fun AdBanner() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     FilledTonalButton(
                         onClick = { uriHandler.openUri(SUPPORT_URL) },
-                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     ) {
                         Text(stringResource(R.string.support_action))
                     }
