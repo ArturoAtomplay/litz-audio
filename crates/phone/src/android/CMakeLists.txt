@@ -17,9 +17,10 @@ endif()
 add_library(litz_phone SHARED oboe_adapter.cpp)
 target_compile_options(litz_phone PRIVATE -Wall -Wextra -Werror)
 
-# The Rust archive contains the JNI entry points and calls the C++ adapter's
-# symbols. Keep the whole archive so JNI exports cannot be dropped, then let
-# --gc-sections remove the unused Rust standard-library and codegen sections.
+# The Rust archive contains the UniFFI exports JNA looks up and calls the C++
+# adapter's symbols. Keep the whole archive so those exports cannot be dropped,
+# then let --gc-sections remove the unused Rust standard-library and codegen
+# sections.
 target_link_libraries(litz_phone PRIVATE
     "-Wl,--whole-archive"
     "${LITZ_RUST_STATICLIB}"
