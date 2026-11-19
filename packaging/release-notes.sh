@@ -8,10 +8,10 @@ case "$tag" in
 *-*) previous="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)" ;;
 *) previous="$(git describe --tags --abbrev=0 --exclude='*-*' "$tag^" 2>/dev/null || true)" ;;
 esac
-range="${previous:+$previous..}$tag"
+subjects="$(git log --no-merges --format='%s' "${previous:+$previous..}$tag")"
 
 section() {
-    items="$(git log --no-merges --format='%s' "$range" |
+    items="$(printf '%s\n' "$subjects" |
         sed -n "s/^$2\(([^)]*)\)\{0,1\}!\{0,1\}: */- /p")"
     if [ -n "$items" ]; then
         printf '## %s\n\n%s\n\n' "$1" "$items"
