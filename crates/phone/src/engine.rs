@@ -22,8 +22,6 @@ pub struct Settings {
     #[uniffi(default)]
     pub muted: bool,
     #[uniffi(default = 1.0)]
-    pub mic_gain: f32,
-    #[uniffi(default = 1.0)]
     pub playback_gain: f32,
     #[uniffi(default)]
     pub input: i32,
@@ -46,7 +44,6 @@ impl Default for Settings {
             mic: false,
             playback: false,
             muted: false,
-            mic_gain: 1.0,
             playback_gain: 1.0,
             input: 0,
             source: 0,
@@ -78,9 +75,7 @@ pub fn changes_audio_path(current: Settings, next: Settings) -> bool {
 
 impl Settings {
     fn validate(&self) -> Result<()> {
-        if !self.mic_gain.is_finite()
-            || !self.playback_gain.is_finite()
-            || !(0.0..=2.0).contains(&self.mic_gain)
+        if !self.playback_gain.is_finite()
             || !(0.0..=2.0).contains(&self.playback_gain)
             || !is_capture_source(self.source)
             || self.headset_ids.len() > 64
@@ -453,8 +448,7 @@ impl Media {
                     audio.silence();
                     return Err(Failure::AudioDiscontinuity.into());
                 }
-                self.microphone_level
-                    .process::<1>(&mut self.captured, self.settings.mic_gain);
+                self.microphone_level.process::<1>(&mut self.captured, 1.0);
                 self.microphone_rms =
                     (self.captured.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
                 self.last_capture_at = Instant::now();
@@ -795,7 +789,7 @@ impl Connected {
         self.media.capture_block = None;
         self.media.capture_offset = 0;
         self.media.captured_len = 0;
-        self.media.microphone_level = GainLimiter::new(desired.mic_gain);
+        self.media.microphone_level = GainLimiter::new(1.0);
         self.media.pending_send = None;
         for (stream, restart) in [
             (Stream::Mic, restart_mic),
@@ -1863,7 +1857,6 @@ mod tests {
             assert!(changes_audio_path(next, base.clone()));
         }
         let louder = Settings {
-            mic_gain: 2.0,
             playback_gain: 0.5,
             reconnect: false,
             ..base.clone()
@@ -2011,7 +2004,7 @@ mod tests {
         assert_eq!(gain(0.9, 2.0), 1.0);
         assert!(
             Settings {
-                mic_gain: f32::INFINITY,
+                playback_gain: f32::INFINITY,
                 ..s
             }
             .validate()

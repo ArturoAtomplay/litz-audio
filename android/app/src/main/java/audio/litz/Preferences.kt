@@ -18,7 +18,6 @@ internal fun Settings.toBundle(): Bundle =
         putBoolean("mic", mic)
         putBoolean("playback", playback)
         putBoolean("muted", muted)
-        putFloat("mic_gain", micGain)
         putFloat("playback_gain", playbackGain)
         putInt("input", input)
         putInt("source", source)
@@ -34,7 +33,6 @@ internal fun settingsFrom(bundle: Bundle): Settings =
         mic = bundle.getBoolean("mic"),
         playback = bundle.getBoolean("playback"),
         muted = bundle.getBoolean("muted"),
-        micGain = bundle.getFloat("mic_gain", 1f),
         playbackGain = bundle.getFloat("playback_gain", 1f),
         input = bundle.getInt("input"),
         source = bundle.getInt("source"),
@@ -48,14 +46,12 @@ internal fun settingsFrom(bundle: Bundle): Settings =
 
 internal data class PreferenceDraft(
     val source: Int? = null,
-    val micGain: Float? = null,
     val playbackGain: Float? = null,
     val reconnect: Boolean? = null,
 ) {
     fun withChanges(before: Settings, after: Settings) =
         copy(
             source = if (before.source != after.source) after.source else source,
-            micGain = if (before.micGain != after.micGain) after.micGain else micGain,
             playbackGain =
                 if (before.playbackGain != after.playbackGain) after.playbackGain else playbackGain,
             reconnect = if (before.reconnect != after.reconnect) after.reconnect else reconnect,
@@ -64,7 +60,6 @@ internal data class PreferenceDraft(
 
 internal fun mergePreferences(actual: Settings, draft: PreferenceDraft?): Settings =
     actual.copy(
-        micGain = draft?.micGain ?: actual.micGain,
         playbackGain = draft?.playbackGain ?: actual.playbackGain,
         source = draft?.source ?: actual.source,
         reconnect = draft?.reconnect ?: actual.reconnect,
@@ -72,14 +67,12 @@ internal fun mergePreferences(actual: Settings, draft: PreferenceDraft?): Settin
 
 internal class Preferences(private val context: Context) {
     private val source = intPreferencesKey("source")
-    private val micGain = floatPreferencesKey("mic_gain")
     private val playbackGain = floatPreferencesKey("playback_gain")
     private val reconnect = booleanPreferencesKey("reconnect")
 
     suspend fun read(): Settings {
         val p = context.preferences.data.first()
         return Settings(
-            micGain = p[micGain] ?: 1f,
             playbackGain = p[playbackGain]?.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 1f,
             reconnect = p[reconnect] ?: true,
             source = p[source]?.takeIf(::isCaptureSource) ?: 0,
@@ -89,7 +82,6 @@ internal class Preferences(private val context: Context) {
     suspend fun writeChanged(before: Settings, after: Settings) {
         context.preferences.edit { p ->
             if (before.source != after.source) p[source] = after.source
-            if (before.micGain != after.micGain) p[micGain] = after.micGain
             if (before.playbackGain != after.playbackGain) p[playbackGain] = after.playbackGain
             if (before.reconnect != after.reconnect) p[reconnect] = after.reconnect
         }
