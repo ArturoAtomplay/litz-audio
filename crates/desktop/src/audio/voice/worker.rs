@@ -11,6 +11,8 @@ pub(super) type Result<T> = std::result::Result<T, String>;
 const HOLD_FRAMES: u8 = (0.200 * 48000.0 / FRAME as f64) as u8;
 const LEVEL_RELEASE_FRAMES: u16 = (0.200 * 48000.0 / FRAME as f64) as u16;
 const AUTOMATIC_THRESHOLD_FACTOR: f32 = 4.0;
+/// Below the voice, where handling, wind and room rumble live.
+const HIGH_PASS_HZ: f64 = 80.0;
 const GATE_ATTACK: f32 = 1.0 / 240.0;
 const GATE_RELEASE_SAMPLES: f32 = 0.150 * 48000.0;
 const GATE_FLOOR: f32 = 0.001;
@@ -214,6 +216,13 @@ impl Biquad {
         let omega = std::f64::consts::TAU * hz / 48000.0;
         (omega.cos(), omega.sin() / std::f64::consts::SQRT_2)
     }
+    fn high_pass(hz: f64) -> Self {
+        let (cos, alpha) = Self::omega(hz);
+        Self::normalized(
+            [(1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0],
+            [1.0 + alpha, -2.0 * cos, 1.0 - alpha],
+        )
+    }
     fn peak(hz: f64, db: i8) -> Self {
         let a = 10f64.powf(f64::from(db) / 40.0);
         let (cos, alpha) = Self::omega(hz);
@@ -266,11 +275,12 @@ impl Biquad {
 }
 
 pub(super) struct Pipeline {
+    high_pass: Biquad,
     noise: suppression::Processor,
     eq: [Biquad; 3],
     level: Level,
     gate: Gate,
-    // Raw input of the previous frame; periodicity is measured pre-denoiser
+    // Input of the previous frame; periodicity is measured pre-denoiser
     // because DeepFilterNet can suppress voiced vowels it misclassifies as noise.
     previous_input: [f32; FRAME],
     settings: VoiceSettings,
@@ -299,6 +309,7 @@ impl Pipeline {
     pub(super) fn reset(&mut self, settings: VoiceSettings) -> Result<()> {
         self.settings = settings;
         self.settling = 0;
+        self.high_pass = Biquad::high_pass(HIGH_PASS_HZ);
         self.eq_target = equalizer(settings.eq_db);
         self.noise.reset(settings.suppression)?;
         self.eq = equalizer(settings.eq_db);
@@ -311,6 +322,7 @@ impl Pipeline {
         Ok(Self {
             settings,
             settling: 0,
+            high_pass: Biquad::high_pass(HIGH_PASS_HZ),
             eq_target: equalizer(settings.eq_db),
             noise: suppression::Processor::try_new(settings.suppression)?,
             eq: equalizer(settings.eq_db),
@@ -324,7 +336,11 @@ impl Pipeline {
             return Err("Invalid microphone PCM".into());
         }
         if !self.settings.enabled() && self.settling == 0 && self.level.gain_db == 0.0 {
+            self.high_pass.z = [0.0; 2];
             return Ok(());
+        }
+        for sample in samples.iter_mut() {
+            *sample = self.high_pass.process(*sample);
         }
         let input = *samples;
         let p = if self.settings.auto_level
@@ -749,11 +765,18 @@ mod tests {
         let mut quiet = [0.001; FRAME];
         pipeline.process(&mut quiet).unwrap();
         assert_eq!(quiet, [0.0; FRAME]);
-        let mut speech = [0.1; FRAME];
+        let tone = |frame: usize| {
+            std::array::from_fn(|i| {
+                let t = (frame * FRAME + i) as f32 / 48000.0;
+                (std::f32::consts::TAU * 300.0 * t).sin() * 0.1
+            })
+        };
+        let mut speech: [f32; FRAME] = tone(0);
         pipeline.process(&mut speech).unwrap();
-        let mut speech = [0.1; FRAME];
+        let mut speech = tone(1);
         pipeline.process(&mut speech).unwrap();
-        assert!(speech.iter().all(|sample| *sample > 0.0));
+        let rms = (speech.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
+        assert!(rms > 0.06);
     }
     #[tokio::test]
     async fn bypass_sanitizes_invalid_pcm_and_reset_forgets_gain() {
@@ -1237,6 +1260,12 @@ mod tests {
             }
         }
         10.0 * (output / input).log10()
+    }
+    #[test]
+    fn high_pass_removes_rumble_and_keeps_the_voice() {
+        assert!(response_db(Biquad::high_pass(HIGH_PASS_HZ), 30.0) < -15.0);
+        assert!((response_db(Biquad::high_pass(HIGH_PASS_HZ), 80.0) + 3.0).abs() < 0.1);
+        assert!(response_db(Biquad::high_pass(HIGH_PASS_HZ), 300.0).abs() < 0.1);
     }
     #[test]
     fn shelves_reach_their_gain_beyond_the_corner_and_leave_the_rest() {
