@@ -1,3 +1,4 @@
+use crate::approval::Answer;
 use crate::identity::Identity;
 use crate::log::{debug, error, info, warning};
 use crate::pairing::{Hub, phone_id};
@@ -451,20 +452,25 @@ async fn pair(
         info!("{who} cancelled pairing");
         return Err("pairing cancelled".into());
     }
+    let refused = if replaces.is_some() {
+        PairOutcome::Full
+    } else {
+        PairOutcome::Declined
+    };
     let outcome = match allowed {
         None => {
             warning!("could not ask whether to pair {who}: no prompt can be shown");
             PairOutcome::Unavailable
         }
-        Some(false) if replaces.is_some() => {
-            info!("declined {who}: every pairing slot is in use");
-            PairOutcome::Full
+        Some(Answer::Unanswered) => {
+            info!("nobody answered whether to pair {who}");
+            refused
         }
-        Some(false) => {
+        Some(Answer::Declined) => {
             info!("declined {who}");
-            PairOutcome::Declined
+            refused
         }
-        Some(true) => match hub
+        Some(Answer::Allowed) => match hub
             .approve(&cert, &name, replaces.map(|(cert, ..)| cert))
             .await
         {

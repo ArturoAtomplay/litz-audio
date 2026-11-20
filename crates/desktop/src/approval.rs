@@ -35,10 +35,18 @@ fn now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
-/// `None` when no prompt can be shown. The prompt is withdrawn, and counts as
-/// a refusal, once `abandoned` completes or the approval window ends.
+/// How a pairing prompt ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Allowed,
+    Declined,
+    Unanswered,
+}
+
+/// `None` when no prompt can be shown. The prompt is withdrawn, unanswered,
+/// once `abandoned` completes or the approval window ends.
 #[cfg(target_os = "linux")]
-pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>) -> Option<bool> {
+pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>) -> Option<Answer> {
     let mut abandoned = std::pin::pin!(abandoned);
     match notification::ask(request, abandoned.as_mut()).await {
         Ok(answer) => Some(answer),
@@ -51,7 +59,7 @@ pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>)
 
 #[cfg(target_os = "linux")]
 mod terminal {
-    use super::{APPROVAL_WINDOW, Future, Request};
+    use super::{APPROVAL_WINDOW, Answer, Future, Request};
     use std::io::BufRead;
     use std::pin::Pin;
     use std::sync::OnceLock;
@@ -80,27 +88,34 @@ mod terminal {
     pub async fn ask(
         request: &Request<'_>,
         abandoned: Pin<&mut impl Future<Output = ()>>,
-    ) -> Option<bool> {
+    ) -> Option<Answer> {
         let mut lines = lines().lock().await;
         while lines.try_recv().is_ok() {}
         eprint!("{}\n{}\n[y/N] ", request.question(), request.details());
         tokio::select! {
-            line = lines.recv() => {
-                line.map(|line| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-            }
-            _ = tokio::time::sleep(APPROVAL_WINDOW) => Some(false),
-            _ = abandoned => Some(false),
+            line = lines.recv() => line.map(|line| {
+                if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                    Answer::Allowed
+                } else {
+                    Answer::Declined
+                }
+            }),
+            _ = tokio::time::sleep(APPROVAL_WINDOW) => Some(Answer::Unanswered),
+            _ = abandoned => Some(Answer::Unanswered),
         }
     }
 }
 
 #[cfg(target_os = "linux")]
 mod notification {
-    use super::{APPROVAL_WINDOW, Future, Request};
+    use super::{APPROVAL_WINDOW, Answer, Future, Request};
     use futures_lite::StreamExt;
     use std::collections::HashMap;
     use std::pin::Pin;
     use zbus::Variant;
+
+    /// The NotificationClosed reason for a notification the user dismissed.
+    const DISMISSED_BY_USER: u32 = 2;
 
     /// Notification servers may render markup in the body.
     fn escape(text: &str) -> String {
@@ -110,11 +125,11 @@ mod notification {
     }
 
     /// `Err` only when no server can show buttons; dismissing the
-    /// notification or letting it expire is a refusal.
+    /// notification is a refusal.
     pub async fn ask(
         request: &Request<'_>,
         abandoned: Pin<&mut impl Future<Output = ()>>,
-    ) -> zbus::Result<bool> {
+    ) -> zbus::Result<Answer> {
         let connection = zbus::Connection::session().await?;
         let proxy = zbus::Proxy::new(
             &connection,
@@ -154,19 +169,27 @@ mod notification {
                     Some("ActionInvoked") => {
                         let (signal_id, action): (u32, String) = message.body().deserialize()?;
                         if signal_id == id {
-                            return Ok(action == "allow");
+                            return Ok(if action == "allow" {
+                                Answer::Allowed
+                            } else {
+                                Answer::Declined
+                            });
                         }
                     }
                     Some("NotificationClosed") => {
-                        let (signal_id, _reason): (u32, u32) = message.body().deserialize()?;
+                        let (signal_id, reason): (u32, u32) = message.body().deserialize()?;
                         if signal_id == id {
-                            return Ok(false);
+                            return Ok(if reason == DISMISSED_BY_USER {
+                                Answer::Declined
+                            } else {
+                                Answer::Unanswered
+                            });
                         }
                     }
                     _ => {}
                 }
             }
-            Ok(false)
+            Ok(Answer::Unanswered)
         };
         tokio::select! {
             answer = answer => return answer,
@@ -174,12 +197,12 @@ mod notification {
             _ = abandoned => {}
         }
         let _: zbus::Result<()> = proxy.call("CloseNotification", &(id,)).await;
-        Ok(false)
+        Ok(Answer::Unanswered)
     }
 }
 
 #[cfg(windows)]
-pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>) -> Option<bool> {
+pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>) -> Option<Answer> {
     match toast::ask(&request.question(), &request.details(), abandoned).await {
         Ok(answer) => Some(answer),
         Err(error) => {
@@ -191,7 +214,7 @@ pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>)
 
 #[cfg(windows)]
 mod toast {
-    use super::{APPROVAL_WINDOW, Future};
+    use super::{APPROVAL_WINDOW, Answer, Future};
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -221,9 +244,9 @@ mod toast {
     const APP_ID: PCWSTR = w!("LitzAudio");
     const ACTIVATOR: GUID = GUID::from_u128(0xBFD99F34_90AE_4D6D_A33A_6EB4D6FCC2A4);
 
-    static PENDING: Mutex<Option<(u64, oneshot::Sender<Result<bool>>)>> = Mutex::new(None);
+    static PENDING: Mutex<Option<(u64, oneshot::Sender<Result<Answer>>)>> = Mutex::new(None);
 
-    fn settle(id: u64, answer: Result<bool>) {
+    fn settle(id: u64, answer: Result<Answer>) {
         let mut pending = PENDING.lock().unwrap();
         if pending.as_ref().is_some_and(|(current, _)| *current == id)
             && let Some((_, sender)) = pending.take()
@@ -236,7 +259,14 @@ mod toast {
         if let Some((choice, id)) = arguments.split_once(' ')
             && let Ok(id) = id.parse()
         {
-            settle(id, Ok(choice == "allow"));
+            settle(
+                id,
+                Ok(if choice == "allow" {
+                    Answer::Allowed
+                } else {
+                    Answer::Declined
+                }),
+            );
         }
     }
 
@@ -370,7 +400,7 @@ mod toast {
         question: &str,
         details: &str,
         abandoned: impl Future<Output = ()>,
-    ) -> Result<bool> {
+    ) -> Result<Answer> {
         static REGISTERED: OnceLock<()> = OnceLock::new();
         static NEXT: AtomicU64 = AtomicU64::new(1);
         if REGISTERED.get().is_none() {
@@ -407,7 +437,7 @@ mod toast {
         toast.Dismissed(&TypedEventHandler::new(
             move |_, args: Ref<ToastDismissedEventArgs>| {
                 if args.ok()?.Reason()? == ToastDismissalReason::UserCanceled {
-                    settle(id, Ok(false));
+                    settle(id, Ok(Answer::Declined));
                 }
                 Ok(())
             },
@@ -420,9 +450,9 @@ mod toast {
         *PENDING.lock().unwrap() = Some((id, sender));
         notifier.Show(&toast)?;
         let answer = tokio::select! {
-            answer = answer => answer.unwrap_or(Ok(false)),
-            _ = tokio::time::sleep(APPROVAL_WINDOW) => Ok(false),
-            _ = abandoned => Ok(false),
+            answer = answer => answer.unwrap_or(Ok(Answer::Unanswered)),
+            _ = tokio::time::sleep(APPROVAL_WINDOW) => Ok(Answer::Unanswered),
+            _ = abandoned => Ok(Answer::Unanswered),
         };
         PENDING.lock().unwrap().take();
         let _ = notifier.Hide(&toast);
