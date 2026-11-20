@@ -207,8 +207,6 @@ impl<'a> Streaming<'a> {
     }
 
     async fn serve(&mut self) -> Result<Exit> {
-        let mut voice_watch = tokio::time::interval(Duration::from_secs(1));
-        voice_watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let wake = WakeListener::try_new(self.ports.wake.clone())?;
         self.ports.reset.store(true, Ordering::Release);
         while self.ports.demand.pop().is_ok() {}
@@ -218,7 +216,6 @@ impl<'a> Streaming<'a> {
                 biased;
                 prepared = async { (&mut self.mic_start.as_mut().unwrap().worker).await },
                     if self.mic_start.is_some() => self.mic_ready(prepared).await?,
-                _ = voice_watch.tick() => self.watch_voice().await?,
                 changed = async { self.ports.outputs.changed().await },
                     if self.awaiting_preferred() => {
                     changed.map_err(|_| "audio loop closed")?;
@@ -248,6 +245,7 @@ impl<'a> Streaming<'a> {
                     self.audio_ready().await?;
                 }
             }
+            self.publish_voice_runtime().await?;
         }
     }
 
@@ -310,7 +308,9 @@ impl<'a> Streaming<'a> {
         self.reply(request_id, self.status()).await
     }
 
-    async fn watch_voice(&mut self) -> Result<()> {
+    /// Only this loop changes the worker, so checking after each event
+    /// reports every change as it happens.
+    async fn publish_voice_runtime(&mut self) -> Result<()> {
         let state = self.voice_runtime();
         if self.advertised.voice_runtime == state {
             return Ok(());
@@ -968,6 +968,38 @@ mod tests {
         let connection = client.connect(address, "litz.local")?.await?;
         let control = Control::new(connection.open_bi().await?);
         Ok((client, control))
+    }
+
+    #[tokio::test]
+    async fn every_voice_state_change_reaches_the_phone_as_it_happens() -> Result<()> {
+        let (_client, mut control) = phone(ports(answering_audio_thread())?).await?;
+        let runtime = async |control: &mut Control| -> Result<Option<VoiceRuntime>> {
+            let Message::Capabilities {
+                desktop: Some(desktop),
+            } = pushed(control).await?
+            else {
+                return Err("expected the voice state".into());
+            };
+            Ok(desktop.voice_runtime)
+        };
+        let mic = Config {
+            stream: Stream::Mic,
+            epoch: 1,
+        };
+        control.write(&Record::new(1, Message::Start(mic))).await?;
+        reply(&mut control, 1).await?;
+        assert_eq!(runtime(&mut control).await?, Some(VoiceRuntime::Off));
+        control
+            .write(&Record::new(
+                2,
+                Message::Stop {
+                    stream: Stream::Mic,
+                },
+            ))
+            .await?;
+        reply(&mut control, 2).await?;
+        assert_eq!(runtime(&mut control).await?, None);
+        Ok(())
     }
 
     #[tokio::test]
