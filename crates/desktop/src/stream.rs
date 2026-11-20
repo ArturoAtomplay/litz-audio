@@ -1017,7 +1017,7 @@ mod tests {
     fn answering_audio_thread() -> crate::audio::CommandSender {
         audio_thread(|operation| match operation {
             CaptureOperation::Active(_, reply) => drop(reply.send(true)),
-            CaptureOperation::Inventory(reply) => drop(reply.send(Vec::new())),
+            CaptureOperation::Inventory(reply) => drop(reply.send(Ok(Vec::new()))),
             CaptureOperation::Route(_, reply) => drop(reply.send(None)),
         })
     }
@@ -1026,7 +1026,7 @@ mod tests {
     async fn a_failed_output_listing_still_answers_the_phone() -> Result<()> {
         let ports = ports(audio_thread(|operation| match operation {
             CaptureOperation::Active(_, reply) => drop(reply.send(true)),
-            CaptureOperation::Inventory(reply) => drop(reply),
+            CaptureOperation::Inventory(reply) => drop(reply.send(Err("unavailable".into()))),
             CaptureOperation::Route(_, reply) => drop(reply.send(None)),
         }))?;
         let (_client, mut control) = phone(ports).await?;
@@ -1046,7 +1046,7 @@ mod tests {
     fn default_output_only() -> crate::audio::CommandSender {
         audio_thread(|operation| match operation {
             CaptureOperation::Active(_, reply) => drop(reply.send(true)),
-            CaptureOperation::Inventory(reply) => drop(reply.send(Vec::new())),
+            CaptureOperation::Inventory(reply) => drop(reply.send(Ok(Vec::new()))),
             CaptureOperation::Route(route, reply) => {
                 let opened = (route == Route::Mirror { name: None }).then(|| CaptureRoute {
                     samples: rtrb::RingBuffer::new(1).1,
@@ -1146,7 +1146,7 @@ mod tests {
             CaptureOperation::Active(_, reply) => drop(reply.send(true)),
             CaptureOperation::Inventory(reply) => {
                 std::thread::sleep(Duration::from_millis(300));
-                drop(reply.send(Vec::new()));
+                drop(reply.send(Ok(Vec::new())));
             }
             CaptureOperation::Route(route, reply) => {
                 let opened = (route == Route::Mirror { name: None }).then(|| CaptureRoute {
@@ -1201,7 +1201,7 @@ mod tests {
                     name: "headphones".into(),
                     label: "Headphones".into(),
                 });
-                drop(reply.send(endpoints.into_iter().collect()));
+                drop(reply.send(Ok(endpoints.into_iter().collect())));
             }
             CaptureOperation::Route(route, reply) => {
                 let opens = match &route {

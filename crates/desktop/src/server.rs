@@ -40,7 +40,7 @@ pub struct Demand {
 }
 pub enum CaptureOperation {
     Active(bool, oneshot::Sender<bool>),
-    Inventory(oneshot::Sender<Vec<Endpoint>>),
+    Inventory(oneshot::Sender<std::result::Result<Vec<Endpoint>, String>>),
     Route(Route, oneshot::Sender<Option<CaptureRoute>>),
 }
 pub type Resolved = tokio::sync::watch::Receiver<Option<String>>;
@@ -444,7 +444,8 @@ pub async fn capture_active(ports: &mut Ports, active: bool) -> transport::Resul
 }
 
 pub fn inventory(ports: &Ports) -> Pending<Vec<Endpoint>> {
-    command(ports, CaptureOperation::Inventory, Duration::from_secs(3))
+    let listed = command(ports, CaptureOperation::Inventory, Duration::from_secs(3));
+    Box::pin(async move { Ok(listed.await??) })
 }
 
 pub async fn desktop_routes(ports: &mut Ports) -> DesktopRoutes {

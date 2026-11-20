@@ -178,7 +178,7 @@ fn serve_devices(
         };
         let next = match received {
             DeviceWork::Command((CaptureOperation::Inventory(reply), _permit)) => {
-                let _ = reply.send(capture::outputs().unwrap_or_default());
+                let _ = reply.send(capture::outputs().map_err(|e| e.to_string()));
                 None
             }
             DeviceWork::Command((CaptureOperation::Active(active, reply), permit)) => {

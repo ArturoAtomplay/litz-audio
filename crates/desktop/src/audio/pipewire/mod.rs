@@ -112,8 +112,8 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
                 let _ = response.send(applied);
             }
             CaptureOperation::Inventory(response) => {
-                let _ = response
-                    .send(super::capture::inventory(&route_core, &route_loop).unwrap_or_default());
+                let listed = super::capture::inventory(&route_core, &route_loop);
+                let _ = response.send(listed.map_err(|e| e.to_string()));
             }
             CaptureOperation::Route(route, response) => {
                 let result =

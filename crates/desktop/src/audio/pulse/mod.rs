@@ -530,7 +530,7 @@ fn handle(
             let _ = reply.send(applied);
         }
         CaptureOperation::Inventory(reply) => {
-            let _ = reply.send(capture::outputs(server).unwrap_or_default());
+            let _ = reply.send(capture::outputs(server).map_err(|e| e.to_string()));
         }
         CaptureOperation::Route(route, reply) => {
             if route == Route::PhoneOnly
