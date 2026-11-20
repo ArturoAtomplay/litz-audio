@@ -13,6 +13,14 @@ const LEVEL_RELEASE_FRAMES: u16 = (0.200 * 48000.0 / FRAME as f64) as u16;
 const AUTOMATIC_THRESHOLD_FACTOR: f32 = 4.0;
 /// Below the voice, where handling, wind and room rumble live.
 const HIGH_PASS_HZ: f64 = 80.0;
+const COMPRESSOR_THRESHOLD_DB: f32 = -10.0;
+const COMPRESSOR_RATIO: f32 = 3.0;
+const COMPRESSOR_KNEE_DB: f32 = 6.0;
+// One-pole time constants at 48 kHz: a 10 ms RMS window, then 5 ms attack
+// and 150 ms release on the gain.
+const COMPRESSOR_WINDOW: f32 = 1.0 / 480.0;
+const COMPRESSOR_ATTACK: f32 = 1.0 / 240.0;
+const COMPRESSOR_RELEASE: f32 = 1.0 / 7200.0;
 const GATE_ATTACK: f32 = 1.0 / 240.0;
 const GATE_RELEASE_SAMPLES: f32 = 0.150 * 48000.0;
 const GATE_FLOOR: f32 = 0.001;
@@ -64,12 +72,16 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
     lanes.iter().sum()
 }
 
-/// Bounded RMS level adaptation, followed by a sample-peak envelope limiter.
-/// Gain rises slowly on periodic voiced input; non-voiced noise cannot pump it.
+/// Bounded RMS level adaptation, a compressor for what it is too slow to
+/// follow, and a sample-peak envelope limiter. Gain rises slowly on periodic
+/// voiced input; non-voiced noise cannot pump it, and the compressor only
+/// lowers loud passages.
 #[derive(Clone, Copy)]
 struct Level {
     automatic: bool,
     gain_db: f32,
+    power: f32,
+    compressor: f32,
     limiter: f32,
     inactive_frames: u16,
 }
@@ -78,6 +90,8 @@ impl Level {
         Self {
             automatic,
             gain_db: 0.0,
+            power: 0.0,
+            compressor: 1.0,
             limiter: 1.0,
             inactive_frames: 0,
         }
@@ -107,11 +121,40 @@ impl Level {
         let gain = 10f32.powf(self.gain_db / 20.0);
         for sample in samples {
             let x = *sample * gain;
+            self.power += (x * x - self.power) * COMPRESSOR_WINDOW;
+            let target = if self.automatic {
+                compression(self.power)
+            } else {
+                1.0
+            };
+            let rate = if target < self.compressor {
+                COMPRESSOR_ATTACK
+            } else {
+                COMPRESSOR_RELEASE
+            };
+            self.compressor += (target - self.compressor) * rate;
+            let x = x * self.compressor;
             let required = (0.95 / x.abs().max(0.95)).min(1.0);
             self.limiter = required.min(self.limiter + (1.0 - self.limiter) * 0.0002);
             *sample = x * self.limiter;
         }
     }
+}
+
+/// Downward gain for an RMS power, on a soft knee.
+fn compression(power: f32) -> f32 {
+    let over = 10.0 * power.max(1e-12).log10() - COMPRESSOR_THRESHOLD_DB;
+    let half = COMPRESSOR_KNEE_DB / 2.0;
+    let slope = 1.0 - 1.0 / COMPRESSOR_RATIO;
+    if over <= -half {
+        return 1.0;
+    }
+    let reduction = if over < half {
+        slope * (over + half).powi(2) / (2.0 * COMPRESSOR_KNEE_DB)
+    } else {
+        slope * over
+    };
+    10f32.powf(-reduction / 20.0)
 }
 
 /// Opens over 5 ms of the lookahead frame and, once the hold ends, fades to
@@ -535,6 +578,8 @@ impl Worker {
             level: previous_level.map(|(gain_db, limiter)| Level {
                 automatic: settings.auto_level,
                 gain_db,
+                power: 0.0,
+                compressor: 1.0,
                 limiter,
                 inactive_frames: 0,
             }),
@@ -785,10 +830,9 @@ mod tests {
         worker.process(&mut invalid).await.unwrap();
         assert_eq!(invalid, [0.0; FRAME]);
         worker.level = Some(Level {
-            automatic: true,
             gain_db: 18.0,
             limiter: 0.5,
-            inactive_frames: 0,
+            ..Level::new(true)
         });
         worker.reset().unwrap();
         assert!(worker.level().is_none());
@@ -1135,12 +1179,7 @@ mod tests {
     }
     #[test]
     fn automatic_level_is_bounded_slow_and_does_not_raise_silence() {
-        let mut level = Level {
-            automatic: true,
-            gain_db: 0.0,
-            limiter: 1.0,
-            inactive_frames: 0,
-        };
+        let mut level = Level::new(true);
         for _ in 0..1000 {
             level.process(&mut [0.0001; FRAME], 0.0);
         }
@@ -1162,13 +1201,34 @@ mod tests {
         assert!(loud.iter().all(|v| v.abs() <= 0.951));
     }
     #[test]
-    fn automatic_level_preserves_an_already_loud_voice() {
-        let mut level = Level {
-            automatic: true,
-            gain_db: 0.0,
-            limiter: 1.0,
-            inactive_frames: 0,
+    fn compressor_lowers_only_loud_passages_with_automatic_level() {
+        let sine = |amplitude: f32, block: usize| -> [f32; FRAME] {
+            std::array::from_fn(|i| {
+                let phase = (block * FRAME + i) as f32 * std::f32::consts::TAU * 220.0 / 48000.0;
+                amplitude * phase.sin()
+            })
         };
+        let rms =
+            |frame: &[f32; FRAME]| (frame.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
+        for (amplitude, automatic, expected) in
+            [(0.1, true, 0.0707), (0.7, true, 0.367), (0.7, false, 0.495)]
+        {
+            let mut level = Level::new(automatic);
+            let mut output = [0.0; FRAME];
+            for block in 0..100 {
+                output = sine(amplitude, block);
+                level.process(&mut output, 0.0);
+            }
+            assert_eq!(level.gain_db, 0.0);
+            assert!(
+                (rms(&output) - expected).abs() < 0.01,
+                "{amplitude} {automatic}"
+            );
+        }
+    }
+    #[test]
+    fn automatic_level_preserves_an_already_loud_voice() {
+        let mut level = Level::new(true);
         let mut output = [0.0; FRAME];
         for block in 0..100 {
             output = std::array::from_fn(|i| {
@@ -1186,12 +1246,7 @@ mod tests {
     }
     #[test]
     fn automatic_level_lifts_quiet_voiced_sound_without_pumping_room_noise() {
-        let mut level = Level {
-            automatic: true,
-            gain_db: 0.0,
-            limiter: 1.0,
-            inactive_frames: 0,
-        };
+        let mut level = Level::new(true);
         let mut seed = 19u32;
         for _ in 0..100 {
             let mut noise = std::array::from_fn(|_| {
