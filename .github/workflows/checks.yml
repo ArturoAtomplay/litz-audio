@@ -22,7 +22,7 @@ jobs:
       - name: Linux development libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libpulse-dev libclang-dev pkg-config cmake
-      - run: rustup show
+      - run: rustup install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all -- --check
       - name: DeepFilterNet model
@@ -62,8 +62,15 @@ jobs:
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - run: pip install ninja==1.13.0
-      - run: rustup target add aarch64-linux-android x86_64-linux-android
+      - run: |
+          rustup install
+          rustup target add aarch64-linux-android x86_64-linux-android
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> android/app/build/rust-target
+            . -> android/app/build/rust-host-target
+            . -> android/app/build/rust-host-library
       - run: cargo install cargo-ndk --version 4.1.2 --locked
       - name: Foss build has no proprietary libraries
         run: |
