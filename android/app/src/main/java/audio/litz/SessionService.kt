@@ -425,6 +425,7 @@ class SessionService : Service() {
         }
         if (!hasAudio && !reconnecting && error != null && foreground) {
             desired = desired.copy(mic = false, playback = false)
+            localError = error
             applyLocked(error)
             return
         }
@@ -456,7 +457,10 @@ class SessionService : Service() {
         wifiFallback = endpoint
     }
 
-    internal fun connect() = control { it.connect() }
+    internal fun connect() {
+        localError = null
+        control { it.connect() }
+    }
 
     internal fun refreshRoutes() = control { it.refreshRoutes() }
 
