@@ -11,6 +11,9 @@ pub(super) type Result<T> = std::result::Result<T, String>;
 const HOLD_FRAMES: u8 = (0.200 * 48000.0 / FRAME as f64) as u8;
 const LEVEL_RELEASE_FRAMES: u16 = (0.200 * 48000.0 / FRAME as f64) as u16;
 const AUTOMATIC_THRESHOLD_FACTOR: f32 = 4.0;
+const GATE_ATTACK: f32 = 1.0 / 240.0;
+const GATE_RELEASE_SAMPLES: f32 = 0.150 * 48000.0;
+const GATE_FLOOR: f32 = 0.001;
 
 // A denoiser or linear predictor can mistake a sustained voiced vowel for
 // stationary noise or a room reflection. Compare each frame with recent input
@@ -109,10 +112,13 @@ impl Level {
     }
 }
 
+/// Opens over 5 ms of the lookahead frame and, once the hold ends, fades to
+/// -60 dB over 150 ms before muting, so word endings are not cut.
 struct Gate {
     previous: [f32; FRAME],
     ready: bool,
     open: bool,
+    gain: f32,
     hold: u8,
     noise_floor: f32,
 }
@@ -122,6 +128,7 @@ impl Default for Gate {
             previous: [0.0; FRAME],
             ready: false,
             open: false,
+            gain: 0.0,
             hold: 0,
             noise_floor: 0.001,
         }
@@ -168,20 +175,21 @@ impl Gate {
             self.noise_floor = (self.noise_floor * (1.0 - rate) + rms * rate).clamp(0.0005, 0.03);
         }
         let current = *samples;
-        if self.open && self.ready {
+        if self.ready {
             *samples = self.previous;
-            if !was_open {
-                for (i, sample) in samples[..240].iter_mut().enumerate() {
-                    *sample *= (i + 1) as f32 / 240.0;
-                }
-            }
-        } else if was_open && self.ready {
-            *samples = self.previous;
-            for (i, sample) in samples[240..].iter_mut().enumerate() {
-                *sample *= (239 - i) as f32 / 240.0;
-            }
         } else {
             samples.fill(0.0);
+        }
+        let release = GATE_FLOOR.powf(1.0 / GATE_RELEASE_SAMPLES);
+        for sample in samples.iter_mut() {
+            self.gain = if self.open {
+                (self.gain + GATE_ATTACK).min(1.0)
+            } else if self.gain > GATE_FLOOR {
+                self.gain * release
+            } else {
+                0.0
+            };
+            *sample *= self.gain;
         }
         self.previous = current;
         self.ready = true;
@@ -1175,6 +1183,31 @@ mod tests {
             }
             assert!((10.0 * (output / input).log10() - f64::from(db)).abs() < 0.02);
         }
+    }
+    #[test]
+    fn gate_fades_out_over_its_release_instead_of_cutting() {
+        let mut gate = Gate::default();
+        let mode = InputSensitivity::Manual(-40);
+        let mut previous_input = [0.0; FRAME];
+        for _ in 0..3 {
+            process_gate(&mut gate, &mut previous_input, &mut [0.1; FRAME], mode);
+        }
+        let mut closing = None;
+        let mut frames = Vec::new();
+        for frame in 0..60 {
+            let mut room = [0.004; FRAME];
+            process_gate(&mut gate, &mut previous_input, &mut room, mode);
+            if !gate.open && closing.is_none() {
+                closing = Some(frame);
+            }
+            frames.push(room);
+        }
+        let closing = closing.unwrap();
+        assert!(frames[closing][FRAME - 1] > 0.002);
+        let fading = &frames[closing + 5];
+        assert!(fading.iter().all(|s| *s > 0.0 && *s < 0.004));
+        assert!(fading.windows(2).all(|w| w[1] <= w[0]));
+        assert!(frames[closing + 16..].iter().flatten().all(|s| *s == 0.0));
     }
     #[test]
     fn silence_and_invalid_pcm_do_not_escape() {
