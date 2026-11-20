@@ -1054,7 +1054,8 @@ enum Event {
     Request(Option<Request>),
     HandedOff(Result<Box<Connected>>),
     Connection(Result<()>),
-    Tick,
+    Retry,
+    Observe,
 }
 
 struct Supervisor {
@@ -1169,7 +1170,7 @@ impl Supervisor {
         &mut self,
         requests: &mut tokio::sync::mpsc::Receiver<Request>,
         cancel: &tokio::sync::Notify,
-        health: &mut tokio::time::Interval,
+        observe: &mut tokio::time::Interval,
     ) -> Event {
         let handoff = async {
             match &mut self.handoff {
@@ -1177,9 +1178,18 @@ impl Supervisor {
                 None => std::future::pending().await,
             }
         };
+        // The protocol has no push for ownership changes, so a phone that is
+        // only watching asks the computer who owns the audio.
+        let observing = self.connected.as_ref().is_some_and(|c| !c.owned);
         let connection = async {
             match &mut self.connected {
                 Some(c) => c.event().await,
+                None => std::future::pending().await,
+            }
+        };
+        let retry = async {
+            match self.retry {
+                Some(at) => tokio::time::sleep_until(at).await,
                 None => std::future::pending().await,
             }
         };
@@ -1189,7 +1199,8 @@ impl Supervisor {
             request = requests.recv() => Event::Request(request),
             result = handoff => Event::HandedOff(result),
             result = connection => Event::Connection(result),
-            _ = health.tick() => Event::Tick,
+            _ = retry => Event::Retry,
+            _ = observe.tick(), if observing => Event::Observe,
         }
     }
 
@@ -1206,17 +1217,7 @@ impl Supervisor {
 
     async fn command(&mut self, command: Command, cancel: &tokio::sync::Notify) {
         match command {
-            Command::Status => {
-                if let Some(c) = self.connected.as_mut()
-                    && !c.owned
-                {
-                    self.error = c
-                        .rpc(Message::GetOwnership {})
-                        .await
-                        .err()
-                        .map(|e| Failure::of(e.as_ref()));
-                }
-            }
+            Command::Status => {}
             Command::Address { endpoint } => self.address(endpoint),
             Command::RefreshRoutes => {
                 if let Some(c) = self.connected.as_mut() {
@@ -1461,12 +1462,15 @@ impl Supervisor {
         }
     }
 
-    async fn tick(&mut self, cancel: &tokio::sync::Notify) {
-        if self
-            .retry
-            .is_some_and(|at| at <= tokio::time::Instant::now())
+    async fn observe(&mut self) {
+        if let Some(c) = self.connected.as_mut()
+            && !c.owned
         {
-            self.reconnect(cancel).await;
+            self.error = c
+                .rpc(Message::GetOwnership {})
+                .await
+                .err()
+                .map(|e| Failure::of(e.as_ref()));
         }
     }
 
@@ -1548,9 +1552,10 @@ async fn run(
     cancelled: Arc<AtomicBool>,
 ) {
     let mut supervisor = Supervisor::new(identity);
-    let mut health = tokio::time::interval(Duration::from_millis(500));
+    let mut observe = tokio::time::interval(Duration::from_secs(1));
+    observe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        match supervisor.next(&mut requests, &cancel, &mut health).await {
+        match supervisor.next(&mut requests, &cancel, &mut observe).await {
             Event::Cancelled => supervisor.cancel(),
             Event::Request(None) => break,
             Event::Request(Some(request)) => {
@@ -1566,7 +1571,8 @@ async fn run(
             Event::HandedOff(result) => supervisor.handed_off(result).await,
             Event::Connection(Ok(())) => {}
             Event::Connection(Err(error)) => supervisor.connection_failed(error).await,
-            Event::Tick => supervisor.tick(&cancel).await,
+            Event::Retry => supervisor.reconnect(&cancel).await,
+            Event::Observe => supervisor.observe().await,
         }
         if let Some(c) = supervisor.connected.as_mut()
             && std::mem::take(&mut c.capture_lost)
