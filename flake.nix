@@ -100,7 +100,7 @@
             pkgs.cargo
             pkgs.rustfmt
             pkgs.clippy
-            pkgs.cargo-audit
+            pkgs.cargo-deny
             pkgs.pipewire
             pkgs.wireplumber
             pkgs.pulseaudio
