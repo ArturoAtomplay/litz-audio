@@ -48,8 +48,8 @@ internal val microphoneSources =
 
 internal data class MicrophoneSource(
     val value: Int,
-    @StringRes val title: Int,
-    @StringRes val description: Int,
+    @param:StringRes val title: Int,
+    @param:StringRes val description: Int,
 )
 
 private enum class Screen {

@@ -10,6 +10,7 @@ import android.media.*
 import android.net.wifi.WifiManager
 import android.os.*
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
 import audio.litz.native.Engine
@@ -258,18 +259,20 @@ class SessionService : Service() {
         return START_NOT_STICKY
     }
 
+    @RequiresApi(29)
+    private fun serviceTypes(s: Settings): Int =
+        (if (s.mic && Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        else 0) or (if (s.playback) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
+
     private fun promote(s: Settings) {
-        val types =
-            (if (s.mic && Build.VERSION.SDK_INT >= 30)
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            else 0) or (if (s.playback) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
+        val types = if (Build.VERSION.SDK_INT >= 29) serviceTypes(s) else 0
         require(s.mic || s.playback)
         // Android 14+ checks microphone while-in-use permissions here.
         if (Build.VERSION.SDK_INT >= 29 && types != 0)
             startForeground(NOTIFICATION, notification(R.string.notification_connecting, s), types)
         else startForeground(NOTIFICATION, notification(R.string.notification_connecting, s))
         foreground = true
-        foregroundTypes = if (Build.VERSION.SDK_INT >= 29) types else 0
+        foregroundTypes = types
     }
 
     internal fun update(settings: Settings, reason: UiText? = null) {
@@ -296,6 +299,9 @@ class SessionService : Service() {
         }
     }
 
+    // Android before 24 and 26 lacks the unprocessed-source property and the
+    // USB headset type; it never reports them, which reads as unsupported.
+    @SuppressLint("InlinedApi")
     private suspend fun applyLocked(reason: UiText?) {
         val generation = stopGeneration
         if (!desired.mic && !desired.playback) {
@@ -476,15 +482,10 @@ class SessionService : Service() {
         if (hasAudio || reconnecting) {
             holdLocks()
         } else releaseLocks()
-        val types =
-            (if (desired.mic && Build.VERSION.SDK_INT >= 30)
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            else 0) or
-                (if (desired.playback) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
         if (
             foreground &&
                 Build.VERSION.SDK_INT >= 29 &&
-                foregroundTypes != types &&
+                foregroundTypes != serviceTypes(desired) &&
                 (desired.mic || desired.playback)
         )
             promote(desired)
@@ -676,6 +677,7 @@ class SessionService : Service() {
             .build()
     }
 
+    @SuppressLint("ObsoleteSdkInt") // The foss flavor still runs on Android 6.
     private fun removeForeground() {
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
         else @Suppress("DEPRECATION") stopForeground(true)

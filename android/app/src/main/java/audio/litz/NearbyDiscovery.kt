@@ -162,7 +162,7 @@ internal class NearbyDiscovery(
         publish()
     }
 
-    @android.annotation.TargetApi(34)
+    @androidx.annotation.RequiresApi(34)
     private fun watch(info: NsdServiceInfo) {
         if (updates.containsKey(info.serviceName)) return
         val callback =

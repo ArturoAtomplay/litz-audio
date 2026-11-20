@@ -32,6 +32,8 @@ android {
         targetSdk = 37
         versionCode = 4
         versionName = "0.4.0"
+        // Lint cannot evaluate nativeAbis, which includes x86_64.
+        //noinspection ChromeOsAbiSupport
         ndk { abiFilters += nativeAbis.keys }
         externalNativeBuild {
             cmake {
@@ -155,6 +157,7 @@ abstract class BuildRust : DefaultTask() {
             workingDir(repository.get().asFile)
             commandLine(arguments)
             environment("ANDROID_NDK_HOME", ndkDirectory.get().asFile.absolutePath)
+            environment("ANDROID_NDK_ROOT", ndkDirectory.get().asFile.absolutePath)
             environment(toolEnvironment.get())
             environment("PKG_CONFIG_ALLOW_CROSS", "0")
             if (sdkCmake.isFile) {

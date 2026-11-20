@@ -1,5 +1,6 @@
 package audio.litz
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
@@ -219,7 +220,11 @@ private fun voiceRuntimeName(runtime: VoiceRuntime): Int =
         VoiceRuntime.RECOVERING -> R.string.diagnostics_voice_recovering
     }
 
-/** The copied report goes to the maintainer, so it is always in English. */
+/**
+ * The copied report goes to the maintainer, so it is always in English: the default resources,
+ * which every app bundle split includes.
+ */
+@SuppressLint("AppBundleLocaleChanges")
 internal fun Context.inEnglish(): Context =
     createConfigurationContext(
         Configuration(resources.configuration).apply { setLocale(Locale.ENGLISH) }

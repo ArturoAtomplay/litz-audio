@@ -9,7 +9,7 @@ import audio.litz.native.Failure
 
 /** Text kept as a resource until it is shown, so it follows the current language. */
 @Immutable
-internal data class UiText(@StringRes val id: Int, val args: List<Any> = emptyList()) {
+internal data class UiText(@param:StringRes val id: Int, val args: List<Any> = emptyList()) {
     @Composable fun resolve(): String = stringResource(id, *args.toTypedArray())
 
     fun resolve(context: Context): String = context.getString(id, *args.toTypedArray())

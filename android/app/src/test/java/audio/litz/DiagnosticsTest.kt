@@ -16,7 +16,9 @@ class DiagnosticsTest {
     private val spanish: Context =
         ApplicationProvider.getApplicationContext<Context>().let {
             it.createConfigurationContext(
-                Configuration(it.resources.configuration).apply { setLocale(Locale("es")) }
+                Configuration(it.resources.configuration).apply {
+                    setLocale(Locale.forLanguageTag("es"))
+                }
             )
         }
 
