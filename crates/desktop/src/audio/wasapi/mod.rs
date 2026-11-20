@@ -81,7 +81,7 @@ type Permit = tokio::sync::OwnedSemaphorePermit;
 pub enum DeviceWork {
     Command(CaptureCommand),
     Reopen,
-    /// An endpoint appeared or went away.
+    /// An endpoint appeared, went away or was reconfigured.
     Changed,
     Closed,
 }
@@ -154,27 +154,37 @@ fn serve_devices(
     callbacks.set_device_state_callback(move |_, _| drop(state.send(DeviceWork::Changed)));
     let added = notify.clone();
     callbacks.set_device_added_callback(move |_| drop(added.send(DeviceWork::Changed)));
-    callbacks.set_device_removed_callback(move |_| drop(notify.send(DeviceWork::Changed)));
-    let _registration = DeviceEnumerator::new()
+    let removed = notify.clone();
+    callbacks.set_device_removed_callback(move |_| drop(removed.send(DeviceWork::Changed)));
+    callbacks.set_property_value_callback(move |_, _| drop(notify.send(DeviceWork::Changed)));
+    let _registration = match DeviceEnumerator::new()
         .and_then(|devices| devices.register_notification_callback(callbacks))
-        .ok();
+    {
+        Ok(registration) => registration,
+        Err(error) => {
+            eprintln!("litzd: device notifications unavailable: {error}");
+            return;
+        }
+    };
     let reopen = |route: &Route, capture: &mut Option<String>| {
         let opened = Capture::open(route).ok();
         *capture = opened.as_ref().map(|c| c.id.clone());
         Ready::Moved(opened.map(Box::new).map(Opened))
     };
-    let mut checked = Instant::now();
     loop {
         let follow = matches!(route, Route::Mirror { name: None });
-        let next = match work.recv_timeout(Duration::from_millis(250)) {
-            Ok(DeviceWork::Command((CaptureOperation::Inventory(reply), _permit))) => {
+        let Ok(received) = work.recv() else {
+            return;
+        };
+        let next = match received {
+            DeviceWork::Command((CaptureOperation::Inventory(reply), _permit)) => {
                 let _ = reply.send(capture::outputs().unwrap_or_default());
                 None
             }
-            Ok(DeviceWork::Command((CaptureOperation::Active(active, reply), permit))) => {
+            DeviceWork::Command((CaptureOperation::Active(active, reply), permit)) => {
                 Some(Ready::Active(active, reply, permit))
             }
-            Ok(DeviceWork::Command((CaptureOperation::Route(request, reply), permit))) => {
+            DeviceWork::Command((CaptureOperation::Route(request, reply), permit)) => {
                 let opened = Capture::open(&request).ok();
                 if let Some(opened) = &opened {
                     capture = Some(opened.id.clone());
@@ -187,36 +197,27 @@ fn serve_devices(
                     permit,
                 ))
             }
-            Ok(DeviceWork::Reopen) if follow => Some(reopen(&route, &mut capture)),
-            Ok(DeviceWork::Reopen) => None,
-            Ok(DeviceWork::Changed) => {
+            DeviceWork::Reopen if follow => Some(reopen(&route, &mut capture)),
+            DeviceWork::Reopen => None,
+            DeviceWork::Changed => {
                 outputs.send_replace(());
-                None
+                if !mic_available.load(Ordering::Acquire)
+                    && let Ok(render) = Render::open()
+                    && ready.send(Ready::Render(Opened(render))).is_err()
+                {
+                    return;
+                }
+                (follow
+                    && capture::select(&route)
+                        .ok()
+                        .and_then(|device| device.get_id().ok())
+                        != capture)
+                    .then(|| reopen(&route, &mut capture))
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Ok(DeviceWork::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            DeviceWork::Closed => return,
         };
         if let Some(next) = next
             && ready.send(next).is_err()
-        {
-            return;
-        }
-        if checked.elapsed() < Duration::from_secs(1) {
-            continue;
-        }
-        checked = Instant::now();
-        if !mic_available.load(Ordering::Acquire)
-            && let Ok(render) = Render::open()
-            && ready.send(Ready::Render(Opened(render))).is_err()
-        {
-            return;
-        }
-        if matches!(route, Route::Mirror { name: None })
-            && capture::select(&route)
-                .ok()
-                .and_then(|device| device.get_id().ok())
-                != capture
-            && ready.send(reopen(&route, &mut capture)).is_err()
         {
             return;
         }
@@ -409,6 +410,9 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+    if !STOP.load(Ordering::Acquire) {
+        return Err("the device thread stopped".into());
     }
     Ok(())
 }
