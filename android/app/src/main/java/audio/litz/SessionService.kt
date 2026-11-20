@@ -220,7 +220,8 @@ class SessionService : Service() {
                             address(found)
                         }
                     }
-                    if (mutable.value.status?.connectedEndpoint != found) {
+                    val current = mutable.value.status?.connectedEndpoint
+                    if ((streaming || current != null) && current != found) {
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastUsbAttempt >= 5000L) {
                             lastUsbAttempt = now
