@@ -95,8 +95,10 @@ Una computadora transmite con un solo teléfono a la vez. Si activas el micrófo
 
 ## Si nada de esto funcionó
 
-Abre un [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) (en español está bien) y pega el reporte de **Ajustes → Acerca de → Diagnóstico**. En Linux, agrega también el log del servicio:
+Abre un [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) (en español está bien) y pega el reporte de **Ajustes → Acerca de → Diagnóstico**. Agrega también el log de la computadora. En Linux:
 
 ```sh
 journalctl --user -u litzd -e
 ```
+
+Agrega `-p warning` para ver solo los problemas. Para más detalle, inicia litzd con `LITZ_LOG=debug`.

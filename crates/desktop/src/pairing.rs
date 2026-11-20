@@ -1,10 +1,16 @@
 use crate::identity::{self, Identity};
+use crate::log::info;
 use litz_core::protocol::{Message, close};
-use litz_core::session::Trust;
+use litz_core::session::{Trust, fingerprint};
 use litz_core::transport;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// The short ID `litzd devices` prints for a phone.
+pub fn phone_id(cert: &[u8]) -> String {
+    fingerprint(cert).to_string()[..8].to_owned()
+}
 
 struct Owner {
     certificate: Vec<u8>,
@@ -103,6 +109,15 @@ impl Hub {
     pub fn trust(&self) -> Trust {
         self.identity.lock().unwrap().trust.clone()
     }
+    /// The phone's name and short ID, for the log.
+    pub fn describe(&self, cert: &[u8]) -> String {
+        let id = phone_id(cert);
+        let identity = self.identity.lock().unwrap();
+        match identity.trust.phones.iter().find(|p| p.certificate == cert) {
+            Some(phone) => format!("\u{201c}{}\u{201d} ({id})", phone.name),
+            None => format!("an unpaired phone ({id})"),
+        }
+    }
     pub fn certificate(&self) -> Vec<u8> {
         self.identity.lock().unwrap().certificate.clone()
     }
@@ -136,6 +151,7 @@ impl Hub {
         .await
     }
     pub async fn forget(self: &Arc<Self>, cert: &[u8]) -> transport::Result<()> {
+        let who = self.describe(cert);
         let cert = cert.to_vec();
         let revoked = Some(cert.clone());
         self.persist(
@@ -143,7 +159,9 @@ impl Hub {
             revoked,
             identity::save,
         )
-        .await
+        .await?;
+        info!("forgot {who}");
+        Ok(())
     }
     pub async fn touch(self: &Arc<Self>, cert: &[u8]) -> transport::Result<()> {
         if self
@@ -269,11 +287,19 @@ impl Hub {
             .find(|p| p.certificate == cert)
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Phone".into());
+        let who = format!("\u{201c}{name}\u{201d} ({})", phone_id(cert));
         let previous = lease.hand_to(Some(Owner {
             certificate: cert.to_vec(),
             name,
             connection: connection.clone(),
         }));
+        match &previous {
+            None => info!("{who} took the audio"),
+            Some(old) if old.certificate == cert => {
+                info!("{who} moved its audio to a new connection");
+            }
+            Some(old) => info!("{who} took the audio from \u{201c}{}\u{201d}", old.name),
+        }
         if let Some(previous) = previous {
             previous
                 .connection
@@ -283,8 +309,10 @@ impl Hub {
     }
     pub fn release(&self, connection: &quinn::Connection) {
         let mut lease = self.lease.lock().unwrap();
-        if lease.held_by(connection) {
-            lease.hand_to(None);
+        if lease.held_by(connection)
+            && let Some(owner) = lease.hand_to(None)
+        {
+            info!("\u{201c}{}\u{201d} released the audio", owner.name);
         }
     }
 }

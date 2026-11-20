@@ -95,8 +95,10 @@ A computer streams with one phone at a time. If you turn on the microphone or Li
 
 ## Still stuck
 
-Open an [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) and paste the report from **Settings → About → Diagnostics**. On Linux, add the service log too:
+Open an [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) and paste the report from **Settings → About → Diagnostics**. Add the computer's log too. On Linux:
 
 ```sh
 journalctl --user -u litzd -e
 ```
+
+Add `-p warning` to see only problems. For more detail, start litzd with `LITZ_LOG=debug`.

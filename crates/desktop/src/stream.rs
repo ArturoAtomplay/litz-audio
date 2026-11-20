@@ -1,4 +1,5 @@
 use crate::audio::voice::Worker;
+use crate::log::{info, warning};
 use crate::pairing::Hub;
 use crate::server::{
     CaptureRoute, Pending, Ports, capture_active, desktop_routes, install_capture, inventory,
@@ -296,7 +297,7 @@ impl<'a> Streaming<'a> {
         let next = match prepared.map_err(|e| e.to_string()).and_then(|r| r) {
             Ok(worker) => worker,
             Err(error) => {
-                eprintln!("litzd: microphone voice preparation failed: {error}");
+                warning!("microphone voice preparation failed: {error}");
                 return self.error(request_id, Code::Invalid).await;
             }
         };
@@ -305,6 +306,7 @@ impl<'a> Streaming<'a> {
         self.reset_mic();
         self.ports.reset.store(true, Ordering::Release);
         self.session.start(config).map_err(|_| "start")?;
+        info!("microphone on");
         self.reply(request_id, self.status()).await
     }
 
@@ -435,10 +437,11 @@ impl<'a> Streaming<'a> {
                     return self.error(request_id, Code::RouteConflict).await;
                 };
                 if let Err(error) = persisted {
-                    eprintln!("litzd: route applied but settings persistence failed: {error}");
+                    warning!("route applied but settings persistence failed: {error}");
                 }
                 self.ports.preferred = Some(route.clone());
                 install_capture(self.ports, route, next);
+                info!("output set to {}", self.describe(self.ports.route.as_ref()));
                 self.ports.revision = self
                     .ports
                     .revision
@@ -457,6 +460,17 @@ impl<'a> Streaming<'a> {
                     };
                 };
                 if self.ports.route.as_ref() != Some(&route) {
+                    if self.ports.preferred.as_ref() == Some(&route) {
+                        info!(
+                            "{} is back; capturing it again",
+                            self.describe(Some(&route))
+                        );
+                    } else {
+                        warning!(
+                            "{} went away; capturing the default output instead",
+                            self.describe(self.ports.preferred.as_ref())
+                        );
+                    }
                     self.ports.revision = self
                         .ports
                         .revision
@@ -561,7 +575,7 @@ impl<'a> Streaming<'a> {
             }
             let mut settings = self.ports.voice;
             if !crate::server::available_suppression().contains(&settings.suppression) {
-                eprintln!("litzd: saved noise suppression is not installed; starting without it");
+                warning!("saved noise suppression is not installed; starting without it");
                 settings.suppression = litz_core::protocol::Suppression::None;
             }
             self.mic_start = Some(MicStart {
@@ -584,6 +598,27 @@ impl<'a> Streaming<'a> {
         self.start_playback(config).await.map(Some)
     }
 
+    /// An output as the person knows it, for the log.
+    fn describe(&self, route: Option<&Route>) -> String {
+        let label = |name: &str| {
+            self.advertised
+                .endpoints
+                .iter()
+                .find(|endpoint| endpoint.name == name)
+                .map_or(name, |endpoint| endpoint.label.as_str())
+                .to_owned()
+        };
+        match route {
+            Some(Route::Mirror { name: Some(name) }) => label(name),
+            Some(Route::Mirror { name: None }) => match self.ports.output() {
+                Some(output) => format!("the default output ({})", label(&output)),
+                None => "the default output".into(),
+            },
+            Some(Route::PhoneOnly) => "the Litz Phone Speaker".into(),
+            None => "no output".into(),
+        }
+    }
+
     async fn start_playback(&mut self, config: Config) -> Result<Message> {
         let encoder = Encoder::try_new(config)?;
         self.drain_capture();
@@ -596,10 +631,12 @@ impl<'a> Streaming<'a> {
         self.encoder = Some(encoder);
         self.captured_frames = 0;
         self.session.start(config).map_err(|_| "start")?;
+        info!("listening to {}", self.describe(self.ports.route.as_ref()));
         Ok(self.status())
     }
 
     async fn stop_listening(&mut self) -> Result<()> {
+        warning!("listening stopped: no output can be captured");
         self.session.stop(Stream::Playback);
         self.encoder = None;
         self.captured_frames = 0;
@@ -609,6 +646,12 @@ impl<'a> Streaming<'a> {
     async fn stop(&mut self, stream: Stream) -> Result<Message> {
         if stream == Stream::Mic && self.mic_start.is_some() {
             return Ok(Message::Error { code: Code::Busy });
+        }
+        if self.session.running[stream.index()].is_some() {
+            match stream {
+                Stream::Mic => info!("microphone off"),
+                Stream::Playback => info!("listening stopped"),
+            }
         }
         self.session.stop(stream);
         if stream == Stream::Mic {
@@ -620,7 +663,7 @@ impl<'a> Streaming<'a> {
             if self.ports.capture.is_some()
                 && let Err(error) = capture_active(self.ports, false).await
             {
-                eprintln!("litzd: capture deactivation failed: {error}");
+                warning!("capture deactivation failed: {error}");
             }
             self.encoder = None;
             self.captured_frames = 0;

@@ -1,4 +1,5 @@
 use super::capture::{self, Capture, Result};
+use crate::log::{error, warning};
 use crate::server::{CaptureCommand, CaptureOperation, CaptureRoute, Demand, Ports};
 use litz_core::wake::Wake;
 use litz_core::{pcm, protocol::Route};
@@ -219,13 +220,13 @@ fn serve_devices(
     {
         Ok(registration) => registration,
         Err(error) => {
-            eprintln!("litzd: device notifications unavailable: {error}");
+            error!("device notifications unavailable: {error}");
             return;
         }
     };
     let reopen = |route: &Route, capture: &mut Option<String>| {
         let opened = Capture::open(route)
-            .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+            .inspect_err(|error| warning!("capture route unavailable: {error}"))
             .ok();
         *capture = opened.as_ref().map(|c| c.id.clone());
         Ready::Moved(opened.map(Box::new).map(Opened))
@@ -245,7 +246,7 @@ fn serve_devices(
             }
             DeviceWork::Command((CaptureOperation::Route(request, reply), permit)) => {
                 let opened = Capture::open(&request)
-                    .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+                    .inspect_err(|error| warning!("capture route unavailable: {error}"))
                     .ok();
                 if let Some(opened) = &opened {
                     capture = Some(opened.id.clone());
@@ -302,10 +303,10 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         _ => Route::Mirror { name: None },
     });
     let mut render = Render::open()
-        .inspect_err(|error| eprintln!("litzd: virtual microphone unavailable: {error}"))
+        .inspect_err(|error| warning!("virtual microphone unavailable: {error}"))
         .ok();
     let mut capture = Capture::open(&route)
-        .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+        .inspect_err(|error| warning!("capture route unavailable: {error}"))
         .ok();
     let wake = Wake::try_new()?;
     let reset = Arc::new(AtomicBool::new(true));
@@ -414,7 +415,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         if let Some(c) = &mut capture
             && let Err(error) = c.drain(&mut captured)
         {
-            eprintln!("litzd: {error}");
+            warning!("{error}");
             if follow {
                 capture = None;
                 resolved.send_replace(None);
@@ -460,7 +461,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
                 Ok(())
             })();
             if let Err(error) = result {
-                eprintln!("litzd: {error}");
+                warning!("{error}");
                 render = None;
                 mic_available.store(false, Ordering::Release);
                 consumer.clear();

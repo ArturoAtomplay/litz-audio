@@ -1,3 +1,4 @@
+use crate::log::warning;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -39,7 +40,7 @@ pub async fn raise_thread_priority() {
             .await
     };
     if let Err(error) = granted.await {
-        eprintln!("litzd: engine thread keeps the default priority: {error}");
+        warning!("engine thread keeps the default priority: {error}");
     }
 }
 #[cfg(windows)]
@@ -56,8 +57,8 @@ pub fn pro_audio_thread() {
     let handle =
         unsafe { AvSetMmThreadCharacteristicsW(windows_sys::core::w!("Pro Audio"), &mut task) };
     if handle.is_null() {
-        eprintln!(
-            "litzd: thread keeps the default priority: {}",
+        warning!(
+            "thread keeps the default priority: {}",
             io::Error::last_os_error()
         );
     }

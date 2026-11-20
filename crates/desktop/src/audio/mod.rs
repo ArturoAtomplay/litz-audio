@@ -42,9 +42,10 @@ pub fn run(
     route: Option<litz_core::protocol::Route>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !tone && pulse::serves_audio() {
-        eprintln!("litzd: using PulseAudio");
+        crate::log::info!("using PulseAudio");
         return pulse::run(route);
     }
+    crate::log::info!("using PipeWire");
     pipewire::run(tone, route)
 }
 #[cfg(windows)]

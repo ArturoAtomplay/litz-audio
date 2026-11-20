@@ -1,4 +1,5 @@
 use super::mic::{Backoff, Control, render};
+use crate::log::{debug, error, warning};
 use litz_core::pcm;
 use litz_core::protocol::Route;
 use pipewire as pw;
@@ -36,7 +37,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     while !stopped.get() {
         let started = std::time::Instant::now();
         if let Err(error) = serve(&mainloop, tone, route.as_ref()) {
-            eprintln!("litzd: {error}");
+            warning!("{error}");
         }
         if stopped.get() {
             break;
@@ -45,10 +46,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
             backoff = Backoff::default();
         }
         let delay = backoff.next();
-        eprintln!(
-            "litzd: recreating PipeWire source in {} ms",
-            delay.as_millis()
-        );
+        warning!("recreating PipeWire source in {} ms", delay.as_millis());
         let loop_clone = mainloop.clone();
         let timer = mainloop.loop_().add_timer(move |_| loop_clone.quit());
         timer.update_timer(Some(delay), None).into_result()?;
@@ -70,7 +68,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             // Route replacement can leave queued commands for a node the
             // server has already removed (ENOENT). That is not a lost core.
             if core_failure_requires_restart(id, res) {
-                eprintln!("litzd: PipeWire core error {res}: {message}");
+                error!("PipeWire core error {res}: {message}");
                 loop_clone.quit();
             }
         })
@@ -84,7 +82,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             |route| match super::capture::open(&core, mainloop, route, wake.clone()) {
                 Ok(capture) => Some(capture),
                 Err(error) => {
-                    eprintln!("litzd: capture route unavailable: {error}");
+                    warning!("capture route unavailable: {error}");
                     None
                 }
             },
@@ -118,7 +116,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             CaptureOperation::Route(route, response) => {
                 let result =
                     super::capture::open(&route_core, &route_loop, &route, route_wake.clone())
-                        .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+                        .inspect_err(|error| warning!("capture route unavailable: {error}"))
                         .ok()
                         .map(|mut next| {
                             let result = crate::server::CaptureRoute {
@@ -192,7 +190,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
     let _control_listener = stream
         .add_local_listener_with_user_data(())
         .state_changed(move |_, _, old, new| {
-            eprintln!("litzd: stream {old:?} -> {new:?}");
+            debug!("stream {old:?} -> {new:?}");
             if !matches!(new, pw::stream::StreamState::Streaming) {
                 state_control.reset.store(true, Ordering::Release);
             }
@@ -224,7 +222,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             format_control.format_ready.store(valid, Ordering::Release);
             format_control.reset.store(true, Ordering::Release);
             if param.is_some() && !valid {
-                eprintln!("litzd: rejected unexpected stream format");
+                warning!("rejected unexpected stream format");
                 format_loop.quit();
             }
         })

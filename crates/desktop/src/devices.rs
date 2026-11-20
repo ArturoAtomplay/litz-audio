@@ -1,6 +1,7 @@
 use crate::identity;
+use crate::log::warning;
 use crate::pairing::Hub;
-use litz_core::session::{SavedPeer, Trust, fingerprint};
+use litz_core::session::{SavedPeer, Trust};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
@@ -34,7 +35,7 @@ struct Device {
 impl From<&SavedPeer> for Device {
     fn from(phone: &SavedPeer) -> Self {
         Self {
-            id: fingerprint(&phone.certificate).to_string()[..8].to_owned(),
+            id: crate::pairing::phone_id(&phone.certificate),
             name: phone.name.clone(),
             last_seen: phone.last_seen,
         }
@@ -265,7 +266,7 @@ pub async fn serve(hub: Arc<Hub>) -> Result<()> {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
             Err(error) => {
-                eprintln!("litzd: devices socket: {error}");
+                warning!("devices socket: {error}");
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 continue;
             }
@@ -483,7 +484,7 @@ pub async fn serve(hub: Arc<Hub>) -> Result<()> {
         let client = std::mem::replace(&mut server, next);
         match connected {
             Ok(()) => spawn_handler(client, &hub),
-            Err(error) => eprintln!("litzd: devices pipe: {error}"),
+            Err(error) => warning!("devices pipe: {error}"),
         }
     }
 }

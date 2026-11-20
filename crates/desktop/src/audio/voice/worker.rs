@@ -1,4 +1,5 @@
 use super::suppression;
+use crate::log::warning;
 use litz_core::protocol::{FRAME, InputSensitivity, VoiceSettings};
 use std::collections::VecDeque;
 use std::sync::mpsc;
@@ -537,7 +538,7 @@ impl Worker {
         }
         let dry = *samples;
         if let Err(error) = self.process_current(samples).await {
-            eprintln!("litzd: voice processing bypassed ({error}); retrying automatically");
+            warning!("voice processing bypassed ({error}); retrying automatically");
             *samples = dry;
             self.disabled = true;
             self.transition = true;

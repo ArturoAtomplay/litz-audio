@@ -1,3 +1,4 @@
+use crate::log::warning;
 use litz_core::protocol::Route;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -15,7 +16,7 @@ pub fn load() -> Result<Settings, Box<dyn std::error::Error>> {
 fn read(path: &Path) -> Result<Settings, Box<dyn std::error::Error>> {
     match crate::platform::read_limited(path, 4096) {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-            eprintln!("litzd: ignoring unreadable settings.json: {error}");
+            warning!("ignoring unreadable settings.json: {error}");
             Settings::default()
         })),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),

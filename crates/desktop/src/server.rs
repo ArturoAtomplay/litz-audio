@@ -1,5 +1,6 @@
 use crate::identity::Identity;
-use crate::pairing::Hub;
+use crate::log::{debug, error, info, warning};
+use crate::pairing::{Hub, phone_id};
 use crate::stream::Exit;
 use litz_core::{
     pcm::PcmProducer,
@@ -104,7 +105,7 @@ pub fn start(ports: Ports) -> Result<Network> {
         .spawn(move || {
             let _lock = lock;
             if let Err(error) = runtime.block_on(listen(path, identity, ports, stopped)) {
-                eprintln!("litzd: secure engine: {error}");
+                error!("secure engine: {error}");
             }
         })?;
     Ok(Network {
@@ -118,7 +119,7 @@ pub fn start_network(ports: Ports) -> Option<Network> {
     match start(ports) {
         Ok(network) => Some(network),
         Err(error) => {
-            eprintln!("litzd: secure engine disabled: {error}");
+            error!("secure engine disabled: {error}");
             None
         }
     }
@@ -133,14 +134,18 @@ async fn listen(
     crate::platform::raise_thread_priority().await;
     let config = transport::server(identity.certificate.clone(), identity.private_key.clone())?;
     let endpoint = transport::server_endpoint(config, identity.bind)?;
-    eprintln!("litzd: secure engine listening on {} (UDP)", identity.bind);
+    info!(
+        "version {} listening on {} (UDP)",
+        env!("CARGO_PKG_VERSION"),
+        identity.bind
+    );
     let identity = Arc::new(std::sync::Mutex::new(identity));
     let hub = Hub::new(identity.clone(), path.clone());
     let commands = tokio::spawn({
         let hub = hub.clone();
         async move {
             if let Err(error) = crate::devices::serve(hub).await {
-                eprintln!("litzd: litzd devices/forget unavailable: {error}");
+                error!("litzd devices/forget unavailable: {error}");
             }
         }
     });
@@ -188,7 +193,9 @@ async fn listen(
                         Ok(()) => serve_connection(&c, &hub, &ports).await,
                         Err(error) => Err(error),
                     };
-                    if let Err(error) = &result { eprintln!("Litz connection ended: {error}"); }
+                    if let Err(error) = &result {
+                        debug!("connection from {} closed: {error}", c.remote_address());
+                    }
                     hub.release(&c);
                     hub.unregister(&c);
                     c.close(if result.is_ok() { close::ENDED } else { close::FAILED }, b"session ended");
@@ -216,6 +223,11 @@ async fn serve_connection(
         return pair(c, &mut control, hub, first, cert).await;
     }
     if !matches!(first.message, Message::GetState {}) || !hub.trusted(&cert) {
+        info!(
+            "refused {} from {}: not paired",
+            hub.describe(&cert),
+            c.remote_address().ip()
+        );
         control
             .write(&Record::new(
                 first.request_id,
@@ -229,11 +241,57 @@ async fn serve_connection(
         return Err("pair again".into());
     }
     if let Err(error) = hub.touch(&cert).await {
-        eprintln!("litzd: could not record phone activity: {error}");
+        warning!("could not record phone activity: {error}");
     }
+    let who = hub.describe(&cert);
+    info!("{who} connected from {}", c.remote_address().ip());
+    let since = Instant::now();
+    let result = serve_phone(c, &mut control, hub, ports, &cert, first.request_id).await;
+    info!(
+        "{who} disconnected after {}: {}",
+        elapsed(since.elapsed()),
+        ended(c, &result)
+    );
+    result
+}
+
+/// How long a session lasted, to the second.
+fn elapsed(time: Duration) -> String {
+    let seconds = time.as_secs();
+    match (seconds / 3600, seconds / 60 % 60, seconds % 60) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, s) => format!("{m}m {s}s"),
+        (h, m, _) => format!("{h}h {m}m"),
+    }
+}
+
+/// Why a phone's session ended, as the person would put it.
+fn ended(c: &quinn::Connection, result: &transport::Result<()>) -> String {
+    match (c.close_reason(), result) {
+        (_, Ok(())) => "the phone was unpaired".into(),
+        (Some(quinn::ConnectionError::ApplicationClosed(closed)), _)
+            if closed.error_code == close::ENDED =>
+        {
+            "the phone closed the connection".into()
+        }
+        (Some(quinn::ConnectionError::TimedOut), _) => "the phone stopped answering".into(),
+        (Some(quinn::ConnectionError::LocallyClosed), Err(error)) => error.to_string(),
+        (Some(reason), _) => reason.to_string(),
+        (None, Err(error)) => error.to_string(),
+    }
+}
+
+async fn serve_phone(
+    c: &quinn::Connection,
+    control: &mut Control,
+    hub: &Arc<Hub>,
+    ports: &tokio::sync::Mutex<Ports>,
+    cert: &[u8],
+    first: u32,
+) -> transport::Result<()> {
     control
         .write(&Record::new(
-            first.request_id,
+            first,
             Message::Status {
                 revision: 0,
                 running: [None; 2],
@@ -242,7 +300,7 @@ async fn serve_connection(
         .await?;
     loop {
         let request = control.read().await?;
-        if !hub.trusted(&cert) {
+        if !hub.trusted(cert) {
             return Err("forgotten; pair again".into());
         }
         let message = match request.message {
@@ -261,13 +319,13 @@ async fn serve_connection(
                 Message::Capabilities { desktop }
             }
             Message::Unpair {} => {
-                hub.forget(&cert).await?;
+                hub.forget(cert).await?;
                 return Ok(());
             }
             Message::Acquire {
                 expected_generation,
             } => {
-                let lease = hub.acquire(&cert, c, expected_generation)?;
+                let lease = hub.acquire(cert, c, expected_generation)?;
                 if matches!(lease, Message::Ownership { owned: true, .. }) {
                     let mut audio = tokio::select! { p = ports.lock() => p, _ = c.closed() => return Err("cancelled acquisition".into()) };
                     if c.close_reason().is_some() {
@@ -276,7 +334,7 @@ async fn serve_connection(
                     control
                         .write(&Record::new(request.request_id, lease))
                         .await?;
-                    let result = crate::stream::run(c, &mut control, &mut audio, hub).await;
+                    let result = crate::stream::run(c, control, &mut audio, hub).await;
                     audio.reset.store(true, Ordering::Release);
                     if audio.capture.is_some() {
                         let _ = capture_active(&mut audio, false).await;
@@ -343,6 +401,8 @@ async fn pair(
     if litz_core::session::commitment(&phone_nonce) != commitment {
         return Err("pairing commitment mismatch".into());
     }
+    let who = format!("\u{201c}{name}\u{201d} ({})", phone_id(&cert));
+    info!("{who} asks to pair from {}", c.remote_address().ip());
     let code =
         litz_core::session::verification_code(&cert, &hub.certificate(), &phone_nonce, &nonce);
     let replaces = if hub.trusted(&cert) {
@@ -363,19 +423,32 @@ async fn pair(
     })
     .await;
     if c.close_reason().is_some() {
+        info!("{who} cancelled pairing");
         return Err("pairing cancelled".into());
     }
     let outcome = match allowed {
-        None => PairOutcome::Unavailable,
-        Some(false) if replaces.is_some() => PairOutcome::Full,
-        Some(false) => PairOutcome::Declined,
+        None => {
+            warning!("could not ask whether to pair {who}: no prompt can be shown");
+            PairOutcome::Unavailable
+        }
+        Some(false) if replaces.is_some() => {
+            info!("declined {who}: every pairing slot is in use");
+            PairOutcome::Full
+        }
+        Some(false) => {
+            info!("declined {who}");
+            PairOutcome::Declined
+        }
         Some(true) => match hub
             .approve(&cert, &name, replaces.map(|(cert, ..)| cert))
             .await
         {
-            Ok(()) => PairOutcome::Accepted,
+            Ok(()) => {
+                info!("paired {who}");
+                PairOutcome::Accepted
+            }
             Err(error) => {
-                eprintln!("litzd: could not save approved phone “{name}”: {error}");
+                warning!("could not save approved phone “{name}”: {error}");
                 PairOutcome::Cancelled
             }
         },
@@ -453,7 +526,7 @@ pub async fn desktop_routes(ports: &mut Ports) -> DesktopRoutes {
 /// A slow or failed inventory keeps `last` rather than ending the session.
 pub fn listed(inventory: transport::Result<Vec<Endpoint>>, last: Vec<Endpoint>) -> Vec<Endpoint> {
     inventory.unwrap_or_else(|error| {
-        eprintln!("litzd: output inventory failed: {error}");
+        warning!("output inventory failed: {error}");
         last
     })
 }

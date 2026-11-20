@@ -6,6 +6,7 @@ mod cli;
 mod devices;
 mod discovery;
 mod identity;
+mod log;
 mod pairing;
 mod platform;
 mod server;

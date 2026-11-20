@@ -1,3 +1,4 @@
+use crate::log::warning;
 use litz_core::protocol::APPROVAL_WINDOW;
 use std::future::Future;
 use std::net::IpAddr;
@@ -42,7 +43,7 @@ pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>)
     match notification::ask(request, abandoned.as_mut()).await {
         Ok(answer) => Some(answer),
         Err(error) => {
-            eprintln!("litzd: no desktop notification ({error}); asking on the terminal");
+            warning!("no desktop notification ({error}); asking on the terminal");
             terminal::ask(request, abandoned).await
         }
     }
@@ -182,7 +183,7 @@ pub async fn approve(request: &Request<'_>, abandoned: impl Future<Output = ()>)
     match toast::ask(&request.question(), &request.details(), abandoned).await {
         Ok(answer) => Some(answer),
         Err(error) => {
-            eprintln!("litzd: approval notification failed: {error}");
+            warning!("approval notification failed: {error}");
             None
         }
     }

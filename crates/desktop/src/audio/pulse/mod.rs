@@ -1,4 +1,5 @@
 use super::mic::{Backoff, Control, render};
+use crate::log::warning;
 use crate::server::{CaptureCommand, CaptureOperation, CaptureRoute, Demand, Ports};
 use libpulse_binding as pulse;
 use litz_core::{pcm, protocol::Route, wake::Wake};
@@ -367,7 +368,7 @@ pub fn run(route: Option<Route>) -> Result<()> {
     loop {
         let started = Instant::now();
         if let Err(error) = serve(route.as_ref(), &stop_wake) {
-            eprintln!("litzd: {error}");
+            warning!("{error}");
         }
         if stopped() {
             return Ok(());
@@ -376,10 +377,7 @@ pub fn run(route: Option<Route>) -> Result<()> {
             backoff = Backoff::default();
         }
         let delay = backoff.next();
-        eprintln!(
-            "litzd: reconnecting to PulseAudio in {} ms",
-            delay.as_millis()
-        );
+        warning!("reconnecting to PulseAudio in {} ms", delay.as_millis());
         let mut stop = [libc::pollfd {
             fd: stop_wake.as_raw_fd(),
             events: libc::POLLIN,
@@ -450,7 +448,7 @@ fn serve_connected(
     let mut capture = match Capture::open(server, &route, wake.clone()) {
         Ok(capture) => Some(capture),
         Err(error) => {
-            eprintln!("litzd: capture route unavailable: {error}");
+            warning!("capture route unavailable: {error}");
             None
         }
     };
@@ -557,7 +555,7 @@ fn handle(
                     Some(result)
                 }
                 Err(error) => {
-                    eprintln!("litzd: capture route unavailable: {error}");
+                    warning!("capture route unavailable: {error}");
                     None
                 }
             };

@@ -1,3 +1,4 @@
+use crate::log::debug;
 use litz_core::pcm::PcmConsumer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,8 +16,8 @@ pub struct Control {
 
 impl Control {
     pub fn report(&self) {
-        eprintln!(
-            "litzd: callbacks={} frames={} silent_frames={}",
+        debug!(
+            "callbacks={} frames={} silent_frames={}",
             self.callbacks.load(Ordering::Relaxed),
             self.frames.load(Ordering::Relaxed),
             self.silence.load(Ordering::Relaxed)
