@@ -10,26 +10,31 @@ struct Faults {
     std::atomic<int> error{0};
 };
 struct Events : oboe::AudioStreamErrorCallback, oboe::AudioStreamRoutingCallback {
+    void *bridge;
     std::shared_ptr<Faults> faults;
     std::atomic<int> inputId{0}, outputId{0};
     std::atomic<bool> armed{false};
-    explicit Events(std::shared_ptr<Faults> f) : faults(std::move(f)) {}
+    Events(void *b, std::shared_ptr<Faults> f) : bridge(b), faults(std::move(f)) {}
+    void fault(int direction) {
+        faults->error.fetch_or(direction);
+        litz_fault(bridge);
+    }
     bool onError(oboe::AudioStream *stream, oboe::Result) override {
-        faults->error.fetch_or(stream->getDirection() == oboe::Direction::Input ? 1 : 2);
+        fault(stream->getDirection() == oboe::Direction::Input ? 1 : 2);
         return true; // owner stops output before closing a nonblocking input
     }
     void onRoutingChanged(oboe::AudioStream *stream, const int32_t *ids, int32_t count) override {
         bool in = stream->getDirection() == oboe::Direction::Input;
         int expected = in ? inputId.load() : outputId.load();
         if (armed.load() && (count != 1 || (expected != 0 && ids[0] != expected)))
-            faults->error.fetch_or(in ? 1 : 2);
+            fault(in ? 1 : 2);
     }
 };
 struct LitzAudio : oboe::FullDuplexStream {
     void *bridge;
     std::shared_ptr<oboe::AudioStream> input, output;
     std::shared_ptr<Faults> faults = std::make_shared<Faults>();
-    std::shared_ptr<Events> events = std::make_shared<Events>(faults);
+    std::shared_ptr<Events> events = std::make_shared<Events>(bridge, faults);
     std::array<float, 2048> scratch{};
     int32_t outputXruns = 0;
 
@@ -58,7 +63,7 @@ struct LitzAudio : oboe::FullDuplexStream {
         } else if (input) {
             auto result = oboe::FullDuplexStream::onAudioReady(stream, data, frames);
             if (result == oboe::DataCallbackResult::Stop)
-                faults->error.fetch_or(1);
+                events->fault(1);
             return result;
         } else {
             litz_render(bridge, static_cast<float *>(data), frames);
@@ -73,7 +78,7 @@ struct LitzAudio : oboe::FullDuplexStream {
         // bounded remainder so a faster input does not accumulate stale samples.
         auto available = input->getAvailableFrames();
         if (!available) {
-            faults->error.fetch_or(1);
+            events->fault(1);
             return oboe::DataCallbackResult::Stop;
         }
         if (available.value() > 0) {
@@ -81,7 +86,7 @@ struct LitzAudio : oboe::FullDuplexStream {
                 input->read(scratch.data(),
                             std::min(available.value(), static_cast<int32_t>(scratch.size())), 0);
             if (!result) {
-                faults->error.fetch_or(1);
+                events->fault(1);
                 return oboe::DataCallbackResult::Stop;
             }
             if (result.value() > 0)

@@ -15,4 +15,5 @@ void litz_audio_info(LitzAudio *audio, LitzAudioInfo *info);
 void litz_audio_close(LitzAudio *audio);
 void litz_capture(void *bridge, const float *samples, int frames);
 void litz_render(void *bridge, float *samples, int frames);
+void litz_fault(void *bridge);
 }

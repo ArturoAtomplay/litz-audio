@@ -391,10 +391,7 @@ impl Media {
         };
         if audio.fault() {
             audio.silence();
-            if audio.info().error != 0 {
-                return Err(Failure::AudioDeviceDisconnected.into());
-            }
-            return Err(Failure::AudioDiscontinuity.into());
+            return Ok(());
         }
         audio.collect();
         audio.set_playback_gain(self.settings.playback_gain);
@@ -1465,7 +1462,6 @@ impl Supervisor {
     }
 
     async fn tick(&mut self, cancel: &tokio::sync::Notify) {
-        self.check_audio_devices().await;
         if self
             .retry
             .is_some_and(|at| at <= tokio::time::Instant::now())
@@ -1578,6 +1574,7 @@ async fn run(
         {
             supervisor.connection_failed(error).await;
         }
+        supervisor.check_audio_devices().await;
     }
 }
 

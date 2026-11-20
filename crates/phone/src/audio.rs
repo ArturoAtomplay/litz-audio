@@ -284,6 +284,14 @@ impl Drop for Audio {
 // with: no allocation, lock or log. Capture is 48 kHz mono and render 48 kHz
 // interleaved stereo. Calls for one direction never overlap, and none runs
 // once the device is dropped.
+/// A device reports a fault from its own error thread; the engine handles it.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn litz_fault(pointer: *mut c_void) {
+    // SAFETY: the Bridge outlives the device, which joins its callbacks when dropped.
+    let b = unsafe { &*pointer.cast::<Bridge>() };
+    b.wake.signal();
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn litz_capture(pointer: *mut c_void, samples: *const f32, frames: i32) {
     // SAFETY: the Bridge outlives the device, which joins its callbacks when dropped.
