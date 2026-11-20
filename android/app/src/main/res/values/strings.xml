@@ -220,7 +220,7 @@
     <string name="failure_moved">Audio moved to another phone.</string>
     <string name="failure_refused">The computer could not start audio.</string>
     <string name="failure_no_virtual_microphone">The computer has no virtual microphone. Install VB-CABLE on it to use this phone as a microphone.</string>
-    <string name="failure_capture_unavailable">The computer\'s sound can\'t be captured. Choose a computer output in Settings.</string>
+    <string name="failure_capture_unavailable">The computer\'s sound can\'t be captured. Check that the computer has a sound output.</string>
     <string name="failure_computer_busy">The computer is busy. Try again.</string>
     <string name="failure_computer_unsupported">The computer does not support this. Update Litz on it.</string>
     <string name="failure_computer_invalid">The computer rejected the request. Update Litz on both devices.</string>
