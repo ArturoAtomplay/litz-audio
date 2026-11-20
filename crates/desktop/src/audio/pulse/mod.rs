@@ -380,9 +380,14 @@ pub fn run(route: Option<Route>) -> Result<()> {
             "litzd: reconnecting to PulseAudio in {} ms",
             delay.as_millis()
         );
-        let resume = Instant::now() + delay;
-        while Instant::now() < resume && !stopped() {
-            std::thread::sleep(Duration::from_millis(50));
+        let mut stop = [libc::pollfd {
+            fd: stop_wake.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        // SAFETY: one pollfd for the eventfd run() keeps open for this call.
+        unsafe {
+            libc::poll(stop.as_mut_ptr(), 1, delay.as_millis() as libc::c_int);
         }
         if stopped() {
             return Ok(());
