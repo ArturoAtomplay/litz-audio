@@ -1,5 +1,3 @@
-#![warn(clippy::undocumented_unsafe_blocks)]
-
 mod approval;
 mod audio;
 mod cli;

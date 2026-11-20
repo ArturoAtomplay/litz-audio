@@ -1,6 +1,5 @@
 //! The phone's side of Litz and the API its app calls. UniFFI generates the
 //! app's side of that API.
-#![warn(clippy::undocumented_unsafe_blocks)]
 #[cfg(target_os = "android")]
 mod android;
 mod audio;
