@@ -22,6 +22,7 @@ import audio.litz.native.VoiceSettings
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 
 internal fun retryDelay(seen: Boolean, failures: Int): Long =
@@ -230,6 +231,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                                 val saved =
                                     withContext(Dispatchers.IO) { IdentityStore(context).saved() }
                                 mutable.update { it.copy(saved = saved) }
+                                reconnectIfIdle()
                             }
                             if (rerouted && ui.discovering) discovery.refresh()
                         }
@@ -276,16 +278,14 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             var failures = 0
-            while (isActive) {
-                delay(2000)
-                val ui = mutable.value
+            mutable.collectLatest { ui ->
                 if (Snapshot(ui.session).connected) {
                     failures = 0
-                    continue
+                    return@collectLatest
                 }
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastAttempt >= retryDelay(seen(ui), failures) && reconnectIfIdle()) {
-                    lastAttempt = now
+                delay(lastAttempt + retryDelay(seen(ui), failures) - SystemClock.elapsedRealtime())
+                if (reconnectIfIdle()) {
+                    lastAttempt = SystemClock.elapsedRealtime()
                     failures++
                 }
             }
