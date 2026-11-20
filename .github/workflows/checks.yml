@@ -30,6 +30,11 @@ jobs:
         run: packaging/fetch-model.sh target/model
       - run: cargo clippy --locked -p litz-core -p litzd --all-targets --all-features -- -D warnings
       - run: cargo test --locked -p litz-core -p litzd --all-features
+      - name: Phone engine
+        if: runner.os == 'Linux'
+        run: |
+          cargo clippy --locked -p litz-phone --all-targets -- -D warnings
+          cargo test --locked -p litz-phone
       - name: Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
