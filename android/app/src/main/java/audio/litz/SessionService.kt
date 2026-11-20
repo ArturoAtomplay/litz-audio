@@ -398,8 +398,7 @@ class SessionService : Service() {
             else -> failure::class.simpleName.orEmpty()
         }
 
-    /** The live microphone level; an engine closed in between has none. */
-    internal fun microphoneLevel(): Float? = runCatching { engine?.microphoneLevel() }.getOrNull()
+    internal fun microphoneLevel(): Float? = synchronized(lifetime) { engine?.microphoneLevel() }
 
     /** Fresh readings for screens that show them; state changes arrive by themselves. */
     internal fun refreshReadings() {
@@ -412,17 +411,22 @@ class SessionService : Service() {
     private suspend fun native(call: (Engine) -> Status): Status? =
         withContext(nativeDispatcher) { engine?.let(call) }
 
-    /** A call on a closed engine throws, so its watcher stops first. */
-    private suspend fun closeEngine() {
-        val (closing, watching) =
-            synchronized(lifetime) {
-                (engine to watcher).also {
-                    engine = null
-                    watcher = null
-                }
+    /**
+     * Takes the engine out of use. A call on a closed engine throws, so the caller closes it only
+     * after `shutdown` has released its watcher and the watcher has finished.
+     */
+    private fun detachEngine(): Pair<Engine, Job?>? =
+        synchronized(lifetime) {
+            val closing = engine ?: return null
+            (closing to watcher).also {
+                engine = null
+                watcher = null
+                closing.shutdown()
             }
-        closing ?: return
-        closing.shutdown()
+        }
+
+    private suspend fun closeEngine() {
+        val (closing, watching) = detachEngine() ?: return
         watching?.cancelAndJoin()
         withContext(nativeDispatcher) { closing.close() }
     }
@@ -683,11 +687,10 @@ class SessionService : Service() {
         audio.unregisterAudioDeviceCallback(devices)
         unregisterReceiver(usbChanged)
         releaseLocks()
-        synchronized(lifetime) { engine?.shutdown() }
-        executor.execute {
-            synchronized(lifetime) {
-                engine?.close()
-                engine = null
+        detachEngine()?.let { (closing, watching) ->
+            executor.execute {
+                runBlocking { watching?.join() }
+                closing.close()
             }
         }
         executor.shutdown()
