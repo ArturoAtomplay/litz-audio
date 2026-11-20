@@ -15,7 +15,7 @@ use android as platform;
 #[cfg(not(target_os = "android"))]
 use host as platform;
 
-pub use identity::{Identity, create_identity};
+pub use identity::Identity;
 use litz_core::protocol::{
     Code, DesktopRoutes, Endpoint, InputSensitivity, Route, Suppression, VoiceRuntime,
     VoiceSettings,

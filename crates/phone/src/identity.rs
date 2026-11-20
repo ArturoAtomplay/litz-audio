@@ -17,8 +17,7 @@ pub struct Identity {
 }
 
 /// A new phone identity, not yet paired with any computer.
-#[uniffi::export]
-pub fn create_identity() -> Result<Identity, Failure> {
+pub(crate) fn create_identity() -> Result<Identity, Failure> {
     let phone = rcgen::generate_simple_self_signed(vec!["litz.local".into()])
         .map_err(|error| Failure::of(&error))?;
     Ok(Identity {

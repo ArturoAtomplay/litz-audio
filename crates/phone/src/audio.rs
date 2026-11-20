@@ -167,8 +167,6 @@ impl Bridge {
 pub struct AudioInfo {
     pub input_rate: i32,
     pub output_rate: i32,
-    pub input_device: i32,
-    pub output_device: i32,
     pub input_exclusive: i32,
     pub output_exclusive: i32,
     pub input_low_latency: i32,

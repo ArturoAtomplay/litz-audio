@@ -204,20 +204,19 @@ extern "C" void litz_audio_info(LitzAudio *a, LitzAudioInfo *i) {
     *i = {};
     i->error = a->faults->error.load();
     i->source = a->input ? static_cast<int32_t>(a->input->getInputPreset()) : 0;
-    auto fill = [](const std::shared_ptr<oboe::AudioStream> &s, int32_t &rate, int32_t &device,
-                   int32_t &exclusive, int32_t &low, int32_t &buffer, int32_t &xruns) {
+    auto fill = [](const std::shared_ptr<oboe::AudioStream> &s, int32_t &rate, int32_t &exclusive,
+                   int32_t &low, int32_t &buffer, int32_t &xruns) {
         if (!s)
             return;
         rate = s->getSampleRate();
-        device = s->getDeviceId();
         exclusive = s->getSharingMode() == oboe::SharingMode::Exclusive;
         low = s->getPerformanceMode() == oboe::PerformanceMode::LowLatency;
         buffer = s->getBufferSizeInFrames();
         auto x = s->getXRunCount();
         xruns = x ? x.value() : -1;
     };
-    fill(a->input, i->input_rate, i->input_device, i->input_exclusive, i->input_low_latency,
-         i->input_buffer, i->input_xruns);
-    fill(a->output, i->output_rate, i->output_device, i->output_exclusive, i->output_low_latency,
-         i->output_buffer, i->output_xruns);
+    fill(a->input, i->input_rate, i->input_exclusive, i->input_low_latency, i->input_buffer,
+         i->input_xruns);
+    fill(a->output, i->output_rate, i->output_exclusive, i->output_low_latency, i->output_buffer,
+         i->output_xruns);
 }

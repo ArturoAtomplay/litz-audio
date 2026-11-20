@@ -5,11 +5,12 @@ import audio.litz.native.Failure
 import audio.litz.native.Pairing
 import audio.litz.native.SessionState
 import audio.litz.native.Settings
-import audio.litz.native.createIdentity
 import audio.litz.native.defaultPort
 import audio.litz.native.isCaptureSource
 import audio.litz.native.manualEndpoint
 import audio.litz.native.mdnsHost
+import audio.litz.native.registryCreate
+import audio.litz.native.registryPhone
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,7 +23,7 @@ import org.junit.Test
 class NativeBridgeTest {
     @Test
     fun theEngineAnswersWithTypedStatus() {
-        val phone = createIdentity()
+        val phone = registryPhone(registryCreate())
         assertTrue(phone.certificate.isNotEmpty() && phone.desktop.isEmpty())
         Engine(phone.copy(desktop = phone.certificate, endpoint = "127.0.0.1:9")).use { engine ->
             val status = engine.set(Settings(mic = true, reconnect = false))
@@ -36,7 +37,7 @@ class NativeBridgeTest {
 
     @Test
     fun aStatusChangeReachesAWaitingReaderAndShutdownReleasesIt() {
-        val phone = createIdentity()
+        val phone = registryPhone(registryCreate())
         Engine(phone.copy(desktop = phone.certificate, endpoint = "127.0.0.1:9")).use { engine ->
             val first = engine.changes(0UL)
             engine.set(Settings(mic = true, reconnect = false))
@@ -66,7 +67,7 @@ class NativeBridgeTest {
     @Test
     fun aRustFailureArrivesAsItsKotlinException() {
         assertThrows(Failure.Internal::class.java) {
-            Pairing(createIdentity(), "0.0.0.0:47165", "", "Phone").close()
+            Pairing(registryPhone(registryCreate()), "0.0.0.0:47165", "", "Phone").close()
         }
     }
 }

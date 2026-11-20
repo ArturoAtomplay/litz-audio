@@ -9,8 +9,6 @@ use std::ffi::c_void;
 struct Info {
     input_rate: i32,
     output_rate: i32,
-    input_device: i32,
-    output_device: i32,
     input_exclusive: i32,
     output_exclusive: i32,
     input_low_latency: i32,
@@ -69,8 +67,6 @@ impl Device {
         AudioInfo {
             input_rate: info.input_rate,
             output_rate: info.output_rate,
-            input_device: info.input_device,
-            output_device: info.output_device,
             input_exclusive: info.input_exclusive,
             output_exclusive: info.output_exclusive,
             input_low_latency: info.input_low_latency,

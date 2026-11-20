@@ -141,7 +141,6 @@ enum Command {
     Status,
     Connect,
     RefreshRoutes,
-    Disconnect,
     Forget,
     Address {
         endpoint: SocketAddr,
@@ -319,10 +318,6 @@ impl Engine {
 
     pub fn refresh_routes(&self) -> std::result::Result<Status, Failure> {
         self.request(Command::RefreshRoutes)
-    }
-
-    pub fn disconnect(&self) -> std::result::Result<Status, Failure> {
-        self.request(Command::Disconnect)
     }
 
     pub fn forget(&self) -> std::result::Result<Status, Failure> {
@@ -1345,11 +1340,6 @@ impl Supervisor {
                 self.connected = None;
                 self.error = None;
             }
-            Command::Disconnect => {
-                self.stop_wanting_audio();
-                self.connected = None;
-                self.error = None;
-            }
             Command::Route {
                 expected_revision,
                 route,
@@ -1981,7 +1971,7 @@ mod tests {
 
     #[test]
     fn connection_and_reconnect_futures_keep_pcm_off_the_stack() {
-        let identity = crate::create_identity().unwrap();
+        let identity = crate::identity::create_identity().unwrap();
         let (_, requests) = tokio::sync::mpsc::channel(2);
         let published = Published::default();
         let future = run(
@@ -2001,7 +1991,7 @@ mod tests {
 
     #[test]
     fn a_status_change_wakes_a_waiting_reader_and_shutdown_releases_it() {
-        let mut identity = crate::create_identity().unwrap();
+        let mut identity = crate::identity::create_identity().unwrap();
         identity.desktop = identity.certificate.clone();
         identity.endpoint = "127.0.0.1:9".parse().unwrap();
         let engine = Engine::new(identity).unwrap();
@@ -2024,7 +2014,7 @@ mod tests {
 
     #[test]
     fn offline_start_stop_and_close_do_not_panic() {
-        let mut identity = crate::create_identity().unwrap();
+        let mut identity = crate::identity::create_identity().unwrap();
         identity.desktop = identity.certificate.clone();
         identity.endpoint = "127.0.0.1:9".parse().unwrap();
         let engine = Engine::new(identity).unwrap();

@@ -387,7 +387,7 @@ mod tests {
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             pair(
-                crate::create_identity()?,
+                crate::identity::create_identity()?,
                 address,
                 expected,
                 "Test phone".into(),
@@ -408,7 +408,7 @@ mod tests {
     async fn a_computer_that_accepts_by_itself_is_not_pinned() -> Result<()> {
         let (address, listener) = computer(PairOutcome::Accepted)?;
         let pairing = Pairing::new(
-            crate::create_identity()?,
+            crate::identity::create_identity()?,
             address,
             String::new(),
             "Test phone".into(),
@@ -482,7 +482,7 @@ mod tests {
             "127.0.0.1:0".parse()?,
         )?;
         let pairing = Pairing::new(
-            crate::create_identity()?,
+            crate::identity::create_identity()?,
             server.local_addr()?,
             String::new(),
             "Test phone".into(),

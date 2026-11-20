@@ -123,9 +123,6 @@ impl Receiver {
     pub fn concealed_frames(&self) -> u64 {
         self.concealed
     }
-    pub fn drift_ratio(&self) -> f64 {
-        1.0 / self.rate
-    }
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -458,7 +455,7 @@ mod tests {
                 r.concealed_frames()
             );
             assert!(r.buffer_ms() < 40.0, "ppm={ppm}: {}", r.buffer_ms());
-            assert!((r.drift_ratio() - 1.0 / (1.0 + ppm / 1e6)).abs() < 0.0002);
+            assert!((1.0 / r.rate - 1.0 / (1.0 + ppm / 1e6)).abs() < 0.0002);
         }
     }
 
