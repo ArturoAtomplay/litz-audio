@@ -162,6 +162,8 @@ internal fun DevicesApp(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             AddComputer(ui, busy, pair, confirmPair, cancelPair, refresh)
+                        } else if (ui.pairing != null) {
+                            PairingCard(ui.pairing, ui, confirmPair, cancelPair)
                         } else {
                             ComputerCard(
                                 selected,
@@ -355,6 +357,38 @@ private fun ComputerCard(
 }
 
 @Composable
+private fun PairingCard(
+    computer: String,
+    ui: UiState,
+    confirmPair: () -> Unit,
+    cancelPair: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LitzBars(Modifier.size(width = 54.dp, height = 40.dp))
+            Text(
+                stringResource(R.string.pairing_with, computer),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            val code = ui.pairingCode
+            if (code == null) {
+                Text(stringResource(R.string.pairing_waiting))
+            } else if (ui.pairingConfirm) {
+                Text(stringResource(R.string.pairing_confirm_if_showed))
+                Text(code, style = MaterialTheme.typography.displaySmall)
+                Text(stringResource(R.string.pairing_codes_differ))
+                Button(onClick = confirmPair) { Text(stringResource(R.string.action_codes_match)) }
+            } else {
+                Text(stringResource(R.string.pairing_allow_if_shows))
+                Text(code, style = MaterialTheme.typography.displaySmall)
+                Text(stringResource(R.string.pairing_codes_differ))
+            }
+            TextButton(onClick = cancelPair) { Text(stringResource(R.string.action_cancel)) }
+        }
+    }
+}
+
+@Composable
 private fun AddComputer(
     ui: UiState,
     busy: Boolean,
@@ -364,33 +398,7 @@ private fun AddComputer(
     refresh: () -> Unit,
 ) {
     var manualDialog by remember { mutableStateOf(false) }
-    if (ui.pairing != null) {
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                LitzBars(Modifier.size(width = 54.dp, height = 40.dp))
-                Text(
-                    stringResource(R.string.pairing_with, ui.pairing),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                val code = ui.pairingCode
-                if (code == null) {
-                    Text(stringResource(R.string.pairing_waiting))
-                } else if (ui.pairingConfirm) {
-                    Text(stringResource(R.string.pairing_confirm_if_showed))
-                    Text(code, style = MaterialTheme.typography.displaySmall)
-                    Text(stringResource(R.string.pairing_codes_differ))
-                    Button(onClick = confirmPair) {
-                        Text(stringResource(R.string.action_codes_match))
-                    }
-                } else {
-                    Text(stringResource(R.string.pairing_allow_if_shows))
-                    Text(code, style = MaterialTheme.typography.displaySmall)
-                    Text(stringResource(R.string.pairing_codes_differ))
-                }
-                TextButton(onClick = cancelPair) { Text(stringResource(R.string.action_cancel)) }
-            }
-        }
-    }
+    ui.pairing?.let { PairingCard(it, ui, confirmPair, cancelPair) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             stringResource(R.string.nearby),
