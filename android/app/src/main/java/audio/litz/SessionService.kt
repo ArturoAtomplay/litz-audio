@@ -54,6 +54,7 @@ class SessionService : Service() {
     // Commands run on nativeDispatcher; `lifetime` lets an urgent cancel reach
     // the engine from another thread without racing its close.
     private var engine: Engine? = null
+    private var watcher: Job? = null
     private val lifetime = Any()
     private var stopGeneration = 0
     private val mutable = MutableStateFlow(SessionStatus())
@@ -356,8 +357,10 @@ class SessionService : Service() {
                     IdentityStore(this@SessionService).readSelected()
                         ?: throw UserFacingException(UiText(R.string.message_pair_first))
                 val opened = Engine(identity)
-                synchronized(lifetime) { engine = opened }
-                watch(opened)
+                synchronized(lifetime) {
+                    engine = opened
+                    watcher = watch(opened)
+                }
             }
         }
 
@@ -409,14 +412,20 @@ class SessionService : Service() {
     private suspend fun native(call: (Engine) -> Status): Status? =
         withContext(nativeDispatcher) { engine?.let(call) }
 
-    private suspend fun closeEngine() =
-        withContext(nativeDispatcher) {
+    /** A call on a closed engine throws, so its watcher stops first. */
+    private suspend fun closeEngine() {
+        val (closing, watching) =
             synchronized(lifetime) {
-                engine?.shutdown()
-                engine?.close()
-                engine = null
+                (engine to watcher).also {
+                    engine = null
+                    watcher = null
+                }
             }
-        }
+        closing ?: return
+        closing.shutdown()
+        watching?.cancelAndJoin()
+        withContext(nativeDispatcher) { closing.close() }
+    }
 
     private suspend fun publish(status: Status?, reason: UiText? = null) {
         if (status?.connectedEndpoint != mutable.value.status?.connectedEndpoint) checkUsb()
