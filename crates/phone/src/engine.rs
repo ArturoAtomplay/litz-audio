@@ -997,6 +997,10 @@ fn retryable(error: &(dyn std::error::Error + 'static)) -> bool {
                 quinn::ConnectionError::ApplicationClosed(closed) => {
                     closed.error_code == close::ENDED
                 }
+                // litzd refuses connections over its rate limit; the next attempt can succeed.
+                quinn::ConnectionError::ConnectionClosed(closed) => {
+                    closed.error_code == quinn::TransportErrorCode::CONNECTION_REFUSED
+                }
                 _ => false,
             };
         }
@@ -1994,6 +1998,19 @@ mod tests {
         )));
         assert!(!retryable(&Failure::Cancelled));
         assert!(retryable(&Failure::ControlTimeout));
+        let closed = |error_code| {
+            quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
+                error_code,
+                frame_type: None,
+                reason: b"".as_slice().into(),
+            })
+        };
+        assert!(retryable(&closed(
+            quinn::TransportErrorCode::CONNECTION_REFUSED
+        )));
+        assert!(!retryable(&closed(
+            quinn::TransportErrorCode::PROTOCOL_VIOLATION
+        )));
     }
     #[test]
     fn defaults_are_stopped_raw_and_gains_are_bounded() {
