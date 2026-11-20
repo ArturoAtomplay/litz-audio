@@ -99,7 +99,7 @@ impl Render {
                     .get_description()
                     .is_ok_and(|pin| pin == "CABLE Input")
             })
-            .ok_or("Install VB-CABLE to use the phone microphone; listening remains available")?;
+            .ok_or("install VB-CABLE, then select CABLE Output in calling apps; listening remains available")?;
         let mut client = device.get_iaudioclient()?;
         client.initialize_client(
             &WaveFormat::new(32, 32, SampleType::Float, 48000, 2, None),
@@ -224,7 +224,9 @@ fn serve_devices(
         }
     };
     let reopen = |route: &Route, capture: &mut Option<String>| {
-        let opened = Capture::open(route).ok();
+        let opened = Capture::open(route)
+            .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+            .ok();
         *capture = opened.as_ref().map(|c| c.id.clone());
         Ready::Moved(opened.map(Box::new).map(Opened))
     };
@@ -242,7 +244,9 @@ fn serve_devices(
                 Some(Ready::Active(active, reply, permit))
             }
             DeviceWork::Command((CaptureOperation::Route(request, reply), permit)) => {
-                let opened = Capture::open(&request).ok();
+                let opened = Capture::open(&request)
+                    .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+                    .ok();
                 if let Some(opened) = &opened {
                     capture = Some(opened.id.clone());
                     route = request;
@@ -297,13 +301,12 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         Some(route @ Route::Mirror { .. }) => route,
         _ => Route::Mirror { name: None },
     });
-    let mut render = Render::open().ok();
-    if render.is_none() {
-        eprintln!(
-            "litzd: virtual microphone unavailable; install VB-CABLE, then select CABLE Output in calling apps"
-        );
-    }
-    let mut capture = Capture::open(&route).ok();
+    let mut render = Render::open()
+        .inspect_err(|error| eprintln!("litzd: virtual microphone unavailable: {error}"))
+        .ok();
+    let mut capture = Capture::open(&route)
+        .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
+        .ok();
     let wake = Wake::try_new()?;
     let reset = Arc::new(AtomicBool::new(true));
     let mic_available = Arc::new(AtomicBool::new(render.is_some()));

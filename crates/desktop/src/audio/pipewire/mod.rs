@@ -118,6 +118,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             CaptureOperation::Route(route, response) => {
                 let result =
                     super::capture::open(&route_core, &route_loop, &route, route_wake.clone())
+                        .inspect_err(|error| eprintln!("litzd: capture route unavailable: {error}"))
                         .ok()
                         .map(|mut next| {
                             let result = crate::server::CaptureRoute {
