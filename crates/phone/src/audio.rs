@@ -163,7 +163,7 @@ impl Bridge {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, uniffi::Record)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, uniffi::Record)]
 pub struct AudioInfo {
     pub input_rate: i32,
     pub output_rate: i32,
@@ -183,7 +183,7 @@ pub struct AudioInfo {
     pub source: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default, uniffi::Record)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, uniffi::Record)]
 pub struct ListeningStats {
     pub buffer_ms: f64,
     pub late: u64,

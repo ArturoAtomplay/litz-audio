@@ -10,7 +10,7 @@ use litz_core::protocol::{
 use litz_core::transport::{self, Control, MediaSender, Result};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
@@ -172,13 +172,13 @@ pub enum SessionState {
     Reconnecting,
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct Direction {
     pub running: bool,
     pub error: Option<Failure>,
 }
 
-#[derive(Clone, Debug, uniffi::Record)]
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct Status {
     pub state: SessionState,
     pub reconnect_allowed: bool,
@@ -202,12 +202,65 @@ pub struct Status {
     pub transport_drops: Option<u64>,
 }
 
+impl Status {
+    /// Without the readings that change on every packet.
+    fn settled(&self) -> Self {
+        Self {
+            microphone_rms: None,
+            callback_frames: None,
+            rtt_ms: None,
+            listening_stats: None,
+            transport_drops: None,
+            ..self.clone()
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct StatusUpdate {
+    pub version: u64,
+    pub status: Status,
+}
+
+/// The engine's latest status, versioned each time its settled part changes.
+#[derive(Default)]
+struct Published {
+    latest: Mutex<Latest>,
+    changed: Condvar,
+}
+#[derive(Default)]
+struct Latest {
+    version: u64,
+    status: Option<Status>,
+    closed: bool,
+}
+impl Published {
+    fn offer(&self, status: Status) {
+        let mut latest = self.latest.lock().unwrap();
+        if latest
+            .status
+            .as_ref()
+            .is_some_and(|known| known.settled() == status.settled())
+        {
+            return;
+        }
+        latest.version += 1;
+        latest.status = Some(status);
+        self.changed.notify_all();
+    }
+    fn close(&self) {
+        self.latest.lock().unwrap().closed = true;
+        self.changed.notify_all();
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct Engine {
     tx: Option<tokio::sync::mpsc::Sender<Request>>,
     worker: Option<std::thread::JoinHandle<()>>,
     cancel: Arc<tokio::sync::Notify>,
     cancelled: Arc<AtomicBool>,
+    published: Arc<Published>,
 }
 #[uniffi::export]
 impl Engine {
@@ -226,6 +279,33 @@ impl Engine {
 
     pub fn status(&self) -> std::result::Result<Status, Failure> {
         self.request(Command::Status)
+    }
+
+    /// Blocks until the status is newer than version `seen`, or the engine closes.
+    pub fn changes(&self, seen: u64) -> std::result::Result<StatusUpdate, Failure> {
+        let mut latest = self.published.latest.lock().unwrap();
+        loop {
+            if latest.closed {
+                return Err(Failure::Internal {
+                    detail: "engine closed".into(),
+                });
+            }
+            if latest.version > seen
+                && let Some(status) = &latest.status
+            {
+                return Ok(StatusUpdate {
+                    version: latest.version,
+                    status: status.clone(),
+                });
+            }
+            latest = self.published.changed.wait(latest).unwrap();
+        }
+    }
+
+    /// Ends the engine's work and releases anyone waiting in `changes`.
+    pub fn shutdown(&self) {
+        self.cancel();
+        self.published.close();
     }
 
     pub fn connect(&self) -> std::result::Result<Status, Failure> {
@@ -290,18 +370,28 @@ impl Engine {
         let stopped = cancel.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = cancelled.clone();
+        let published = Arc::new(Published::default());
+        let worker_published = published.clone();
         let worker = std::thread::Builder::new()
             .name("litz-engine".into())
             .stack_size(4 * 1024 * 1024)
             .spawn(move || {
                 crate::platform::raise_thread_priority();
-                runtime.block_on(Box::pin(run(identity, rx, stopped, worker_cancelled)));
+                runtime.block_on(Box::pin(run(
+                    identity,
+                    rx,
+                    stopped,
+                    worker_cancelled,
+                    &worker_published,
+                )));
+                worker_published.close();
             })?;
         Ok(Self {
             tx: Some(tx),
             worker: Some(worker),
             cancel,
             cancelled,
+            published,
         })
     }
     fn request(&self, command: Command) -> std::result::Result<Status, Failure> {
@@ -1550,10 +1640,12 @@ async fn run(
     mut requests: tokio::sync::mpsc::Receiver<Request>,
     cancel: Arc<tokio::sync::Notify>,
     cancelled: Arc<AtomicBool>,
+    published: &Published,
 ) {
     let mut supervisor = Supervisor::new(identity);
     let mut observe = tokio::time::interval(Duration::from_secs(1));
     observe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    published.offer(supervisor.status());
     loop {
         match supervisor.next(&mut requests, &cancel, &mut observe).await {
             Event::Cancelled => supervisor.cancel(),
@@ -1581,6 +1673,7 @@ async fn run(
             supervisor.connection_failed(error).await;
         }
         supervisor.check_audio_devices().await;
+        published.offer(supervisor.status());
     }
 }
 
@@ -1881,11 +1974,13 @@ mod tests {
     fn connection_and_reconnect_futures_keep_pcm_off_the_stack() {
         let identity = crate::create_identity().unwrap();
         let (_, requests) = tokio::sync::mpsc::channel(2);
+        let published = Published::default();
         let future = run(
             identity,
             requests,
             Arc::new(tokio::sync::Notify::new()),
             Arc::new(AtomicBool::new(false)),
+            &published,
         );
         assert!(std::mem::size_of::<Connected>() < 4096);
         assert!(
@@ -1893,6 +1988,29 @@ mod tests {
             "engine future is {} bytes",
             std::mem::size_of_val(&future)
         );
+    }
+
+    #[test]
+    fn a_status_change_wakes_a_waiting_reader_and_shutdown_releases_it() {
+        let mut identity = crate::create_identity().unwrap();
+        identity.desktop = identity.certificate.clone();
+        identity.endpoint = "127.0.0.1:9".parse().unwrap();
+        let engine = Engine::new(identity).unwrap();
+        let first = engine.changes(0).unwrap();
+        let waiting = std::thread::spawn({
+            let engine = engine.clone();
+            move || engine.changes(first.version)
+        });
+        engine.connect().unwrap();
+        let next = waiting.join().unwrap().unwrap();
+        assert!(next.version > first.version);
+        assert!(next.status.error.is_some());
+        let blocked = std::thread::spawn({
+            let engine = engine.clone();
+            move || engine.changes(u64::MAX)
+        });
+        engine.shutdown();
+        assert!(blocked.join().unwrap().is_err());
     }
 
     #[test]

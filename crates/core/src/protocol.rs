@@ -221,14 +221,14 @@ pub enum Route {
 }
 /// Stable backend names only. The inventory is a bounded snapshot, not authority
 /// to use a route: ApplySettings must validate it again against live objects.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Endpoint {
     #[serde(deserialize_with = "bounds::text::<_, 256>")]
     pub name: String,
     #[serde(deserialize_with = "bounds::text::<_, 256>")]
     pub label: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DesktopRoutes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_runtime: Option<VoiceRuntime>,

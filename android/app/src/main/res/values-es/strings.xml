@@ -197,7 +197,6 @@
     <string name="message_directions_stopped">Audio detenido</string>
     <string name="message_device_disconnected">Se desconectó el dispositivo de audio elegido, así que esa dirección se detuvo.</string>
     <string name="message_headphones_disconnected">Se desconectaron los audífonos. Toca Escuchar para usar el altavoz del teléfono.</string>
-    <string name="message_microphone_permission_revoked">Se quitó el permiso del micrófono.</string>
     <string name="message_local_network_needed">Permite el acceso a la red local para encontrar computadoras cercanas.</string>
     <string name="message_permission_denied">Permiso denegado. Permite el acceso a la red local y, para el micrófono, el acceso al micrófono en los ajustes de Android; luego inténtalo de nuevo.</string>
     <string name="discovery_failed">La búsqueda de computadoras cercanas falló (%1$d). Revisa los permisos de red y toca Actualizar.</string>

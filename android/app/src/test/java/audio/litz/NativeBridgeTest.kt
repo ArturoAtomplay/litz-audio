@@ -10,6 +10,7 @@ import audio.litz.native.defaultPort
 import audio.litz.native.isCaptureSource
 import audio.litz.native.manualEndpoint
 import audio.litz.native.mdnsHost
+import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,6 +31,25 @@ class NativeBridgeTest {
             val stopped = engine.stop()
             assertFalse(stopped.desired.mic)
             assertEquals(SessionState.IDLE, stopped.state)
+        }
+    }
+
+    @Test
+    fun aStatusChangeReachesAWaitingReaderAndShutdownReleasesIt() {
+        val phone = createIdentity()
+        Engine(phone.copy(desktop = phone.certificate, endpoint = "127.0.0.1:9")).use { engine ->
+            val first = engine.changes(0UL)
+            engine.set(Settings(mic = true, reconnect = false))
+            val next = engine.changes(first.version)
+            assertTrue(next.version > first.version)
+            assertNotNull(next.status.error)
+            var released: Throwable? = null
+            val waiting = thread {
+                released = runCatching { engine.changes(ULong.MAX_VALUE) }.exceptionOrNull()
+            }
+            engine.shutdown()
+            waiting.join(5_000)
+            assertTrue(released is Failure.Internal)
         }
     }
 

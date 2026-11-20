@@ -32,6 +32,7 @@ import audio.litz.native.Settings
 import audio.litz.native.VoiceSettings
 import audio.litz.native.manualEndpoint
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 internal val microphoneSources =
@@ -77,6 +78,7 @@ internal fun DevicesApp(
     route: (ULong, Route) -> Unit = { _, _ -> },
     refreshRoutes: () -> Unit = {},
     voice: (ULong, VoiceSettings) -> Unit = { _, _ -> },
+    refreshReadings: () -> Unit = {},
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
     BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
@@ -199,7 +201,8 @@ internal fun DevicesApp(
                             cancelPair,
                             refresh,
                         )
-                    Screen.Settings -> SettingsScreen(ui, status, busy, edit, apply, voice)
+                    Screen.Settings ->
+                        SettingsScreen(ui, status, busy, edit, apply, voice, refreshReadings)
                 }
             }
         }
@@ -682,7 +685,14 @@ private fun SettingsScreen(
     edit: (Settings) -> Unit,
     apply: () -> Unit,
     voice: (ULong, VoiceSettings) -> Unit,
+    refreshReadings: () -> Unit,
 ) {
+    LaunchedEffect(Unit) {
+        while (true) {
+            refreshReadings()
+            delay(500)
+        }
+    }
     var sources by remember { mutableStateOf(false) }
     val context = LocalContext.current
     SectionHeader(stringResource(R.string.settings_phone_microphone))

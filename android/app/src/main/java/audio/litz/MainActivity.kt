@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
                     route = vm::route,
                     refreshRoutes = vm::refreshRoutes,
                     voice = vm::voice,
+                    refreshReadings = vm::refreshReadings,
                 )
             }
         }

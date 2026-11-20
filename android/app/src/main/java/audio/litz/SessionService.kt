@@ -1,6 +1,7 @@
 package audio.litz
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
 import android.content.pm.PackageManager
@@ -11,6 +12,7 @@ import android.os.*
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
 import audio.litz.native.Engine
+import audio.litz.native.Failure
 import audio.litz.native.Route
 import audio.litz.native.SessionState
 import audio.litz.native.Settings
@@ -22,6 +24,7 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -147,27 +150,6 @@ class SessionService : Service() {
         else
             @Suppress("DEPRECATION")
             registerReceiver(noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
-        scope.launch {
-            while (isActive) {
-                delay(500)
-                if (active)
-                    mutex.withLock {
-                        if (
-                            desired.mic &&
-                                checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-                                    PackageManager.PERMISSION_GRANTED
-                        ) {
-                            desired = desired.copy(mic = false)
-                            applyLocked(UiText(R.string.message_microphone_permission_revoked))
-                        } else
-                            try {
-                                publish(native { it.status() })
-                            } catch (e: Exception) {
-                                fail(e.text())
-                            }
-                    }
-            }
-        }
         scope.launch {
             var idleTurn = false
             while (isActive) {
@@ -375,8 +357,33 @@ class SessionService : Service() {
                         ?: throw UserFacingException(UiText(R.string.message_pair_first))
                 val opened = Engine(identity)
                 synchronized(lifetime) { engine = opened }
+                watch(opened)
             }
         }
+
+    /** Publishes each status change the engine reports, until it shuts down. */
+    private fun watch(opened: Engine) =
+        scope.launch {
+            var seen = 0UL
+            while (true) {
+                val update =
+                    try {
+                        withContext(Dispatchers.IO) { opened.changes(seen) }
+                    } catch (_: Failure) {
+                        return@launch
+                    }
+                seen = update.version
+                mutex.withLock { if (active && engine === opened) publish(update.status) }
+            }
+        }
+
+    /** Fresh readings for screens that show them; state changes arrive by themselves. */
+    internal fun refreshReadings() {
+        scope.launch {
+            val fresh = runCatching { native { it.status() } }.getOrNull() ?: return@launch
+            mutable.update { it.copy(status = fresh) }
+        }
+    }
 
     private suspend fun native(call: (Engine) -> Status): Status? =
         withContext(nativeDispatcher) { engine?.let(call) }
@@ -384,6 +391,7 @@ class SessionService : Service() {
     private suspend fun closeEngine() =
         withContext(nativeDispatcher) {
             synchronized(lifetime) {
+                engine?.shutdown()
                 engine?.close()
                 engine = null
             }
@@ -532,8 +540,10 @@ class SessionService : Service() {
         }
     }
 
+    // Held for exactly as long as audio flows; releaseLocks() ends it.
+    @SuppressLint("WakelockTimeout")
     private fun holdLocks() {
-        wake.acquire(60_000)
+        if (!wake.isHeld) wake.acquire()
         wifiLocks.forEach { if (!it.isHeld) it.acquire() }
     }
 
@@ -642,7 +652,7 @@ class SessionService : Service() {
         audio.unregisterAudioDeviceCallback(devices)
         unregisterReceiver(noisy)
         releaseLocks()
-        synchronized(lifetime) { engine?.cancel() }
+        synchronized(lifetime) { engine?.shutdown() }
         executor.execute {
             synchronized(lifetime) {
                 engine?.close()
