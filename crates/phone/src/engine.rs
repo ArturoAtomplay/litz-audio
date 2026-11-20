@@ -510,6 +510,7 @@ struct Connected {
     owner: Option<String>,
     generation: u64,
     owned: bool,
+    capture_lost: bool,
 }
 type Handoff = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<Connected>>>>>;
 impl Drop for Connected {
@@ -519,6 +520,8 @@ impl Drop for Connected {
     }
 }
 impl Connected {
+    /// Cancelled whenever the supervisor has anything else to do, so it never
+    /// waits on a reply; the supervisor acts on pushes after it.
     async fn event(&mut self) -> Result<()> {
         let capture_deadline =
             tokio::time::Instant::from_std(self.media.last_capture_at + Duration::from_secs(3));
@@ -528,28 +531,36 @@ impl Connected {
             _ = tokio::time::sleep_until(capture_deadline), if watching_capture => {
                 Err(Failure::AudioDiscontinuity.into())
             }
-            record = self.control.read() => {
-                match record {
-                    Ok(Record { request_id: 0, message: Message::Capabilities { desktop: Some(desktop), .. }, .. }) => {
-                        self.revision = desktop.revision;
-                        self.desktop = Some(desktop);
-                        Ok(())
-                    }
-                    Ok(Record { request_id: 0, message: Message::Error { code: Code::RouteConflict }, .. }) => {
-                        let mut remaining = self.media.settings.clone();
-                        remaining.playback = false;
-                        self.apply(&remaining).await?;
-                        self.direction_errors[1] = Some(Failure::ComputerRefused {
-                            reason: Code::RouteConflict,
-                        });
-                        self.refresh_routes().await?;
-                        Ok(())
-                    }
-                    Ok(_) => Err(Failure::UnexpectedReply.into()),
-                    Err(e) => Err(e),
-                }
+            record = self.control.read() => match record? {
+                Record { request_id: 0, message, .. } => self.pushed(message),
+                _ => Err(Failure::UnexpectedReply.into()),
             }
         }
+    }
+    async fn stop_listening(&mut self) -> Result<()> {
+        let mut remaining = self.media.settings.clone();
+        remaining.playback = false;
+        self.apply(&remaining).await?;
+        self.direction_errors[1] = Some(Failure::ComputerRefused {
+            reason: Code::RouteConflict,
+        });
+        self.refresh_routes().await
+    }
+    fn pushed(&mut self, message: Message) -> Result<()> {
+        match message {
+            Message::Capabilities {
+                desktop: Some(desktop),
+                ..
+            } => {
+                self.revision = desktop.revision;
+                self.desktop = Some(desktop);
+            }
+            Message::Error {
+                code: Code::RouteConflict,
+            } => self.capture_lost = true,
+            _ => return Err(Failure::UnexpectedReply.into()),
+        }
+        Ok(())
     }
     async fn rpc(&mut self, message: Message) -> Result<Message> {
         self.request = self.request.wrapping_add(1).max(1);
@@ -564,12 +575,8 @@ impl Connected {
                 record = self.control.read() => {
                     let record = record?;
                     if record.request_id == 0 {
-                        if let Message::Capabilities { desktop: Some(desktop), .. } = record.message {
-                            self.revision = desktop.revision;
-                            self.desktop = Some(desktop);
-                            continue;
-                        }
-                        return Err(Failure::UnexpectedReply.into());
+                        self.pushed(record.message)?;
+                        continue;
                     }
                     if record.request_id != self.request {
                         return Err(Failure::UnexpectedReply.into());
@@ -954,6 +961,7 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
         owner: None,
         generation: 0,
         owned: false,
+        capture_lost: false,
         media: Box::new(Media {
             connection,
             audio: None,
@@ -1566,6 +1574,12 @@ async fn run(
             Event::Connection(Err(error)) => supervisor.connection_failed(error).await,
             Event::Tick => supervisor.tick(&cancel).await,
         }
+        if let Some(c) = supervisor.connected.as_mut()
+            && std::mem::take(&mut c.capture_lost)
+            && let Err(error) = c.stop_listening().await
+        {
+            supervisor.connection_failed(error).await;
+        }
     }
 }
 
@@ -1617,7 +1631,24 @@ mod tests {
                     owner: None,
                     owned: false,
                 },
-                Message::Capabilities { .. } => Message::Capabilities { desktop: None },
+                Message::Capabilities { .. } => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    Message::Capabilities { desktop: None }
+                }
+                Message::Stop { .. } => {
+                    control
+                        .write(&Record::new(
+                            0,
+                            Message::Error {
+                                code: Code::RouteConflict,
+                            },
+                        ))
+                        .await?;
+                    Message::Status {
+                        revision: 0,
+                        running: [None, None],
+                    }
+                }
                 _ => return Err("unexpected request".into()),
             };
             control
@@ -1651,6 +1682,35 @@ mod tests {
         supervisor.handed_off(result).await;
         assert_eq!(remote(&supervisor), Some(usb));
         assert!(supervisor.handoff.is_none() && supervisor.error.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_capture_lost_during_a_request_is_not_a_protocol_error() -> Result<()> {
+        let (identity, _) = computer()?;
+        let mut connected = connect(&identity).await?;
+        let reply = connected
+            .rpc(Message::Stop {
+                stream: Stream::Playback,
+            })
+            .await?;
+        assert!(matches!(reply, Message::Status { .. }));
+        assert!(connected.capture_lost);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_event_leaves_no_reply_unread() -> Result<()> {
+        let (identity, _) = computer()?;
+        let mut connected = connect(&identity).await?;
+        connected
+            .rpc(Message::Stop {
+                stream: Stream::Playback,
+            })
+            .await?;
+        let _ = tokio::time::timeout(Duration::from_millis(20), connected.event()).await;
+        let reply = connected.rpc(Message::GetState {}).await?;
+        assert!(matches!(reply, Message::Status { .. }));
         Ok(())
     }
 
