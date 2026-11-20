@@ -64,7 +64,7 @@ If the phone doesn't see the computer, try **Pair by IP address**, and check tha
 
 With the microphone on, the PC also hears whatever comes out of the phone's speaker. Headphones fix that. Without them, the **Calls and meetings** recording mode in Settings uses the phone's echo cancellation if it has one, which makes Android treat your voice like a phone call.
 
-To see or remove paired phones from the computer, run `litzd devices` or `litzd forget NAME`.
+To see or remove paired phones from the computer, run `litzd devices` or `litzd forget NAME` (`litzd forget --all` removes every phone).
 
 ## Building
 

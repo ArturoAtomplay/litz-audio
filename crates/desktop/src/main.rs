@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         cli::Command::Devices => devices::list(),
         cli::Command::Forget(phone) => devices::forget(&phone),
+        cli::Command::ForgetAll => devices::forget_all(),
         cli::Command::Version => {
             println!("litzd {}", env!("CARGO_PKG_VERSION"));
             Ok(())

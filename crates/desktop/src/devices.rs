@@ -13,12 +13,14 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 enum Request {
     Devices,
     Forget(String),
+    ForgetAll,
 }
 
 #[derive(Serialize, Deserialize)]
 enum Response {
     Devices(Vec<Device>),
     Forgot(String),
+    ForgotAll(Vec<String>),
     Error(String),
 }
 
@@ -69,7 +71,7 @@ pub fn list() -> Result<()> {
     let devices = match ask(&Request::Devices)? {
         Some(Response::Devices(devices)) => devices,
         Some(Response::Error(error)) => return Err(error.into()),
-        Some(Response::Forgot(_)) => return Err("unexpected reply from litzd".into()),
+        Some(_) => return Err("unexpected reply from litzd".into()),
         None => saved()?.phones.iter().map(Device::from).collect(),
     };
     if devices.is_empty() {
@@ -90,10 +92,28 @@ pub fn forget(query: &str) -> Result<()> {
     let name = match ask(&Request::Forget(query.into()))? {
         Some(Response::Forgot(name)) => name,
         Some(Response::Error(error)) => return Err(error.into()),
-        Some(Response::Devices(_)) => return Err("unexpected reply from litzd".into()),
+        Some(_) => return Err("unexpected reply from litzd".into()),
         None => forget_saved(query)?,
     };
     println!("Forgot \u{201c}{name}\u{201d}. It must pair again to connect.");
+    Ok(())
+}
+
+pub fn forget_all() -> Result<()> {
+    let names = match ask(&Request::ForgetAll)? {
+        Some(Response::ForgotAll(names)) => names,
+        Some(Response::Error(error)) => return Err(error.into()),
+        Some(_) => return Err("unexpected reply from litzd".into()),
+        None => forget_all_saved()?,
+    };
+    match names.as_slice() {
+        [] => println!("No phones are paired."),
+        [name] => println!("Forgot \u{201c}{name}\u{201d}. It must pair again to connect."),
+        _ => println!(
+            "Forgot {} phones. They must pair again to connect.",
+            names.len()
+        ),
+    }
     Ok(())
 }
 
@@ -120,6 +140,27 @@ fn forget_saved(query: &str) -> Result<String> {
     identity.trust = identity.trust.forget(&phone.certificate.clone());
     identity::save(&path, &identity)?;
     Ok(name)
+}
+
+/// Only safe when no daemon answered: the daemon keeps the registry in memory.
+fn forget_all_saved() -> Result<Vec<String>> {
+    let directory = identity::directory()?;
+    let path = directory.join("identity.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let _lock =
+        identity::agent_lock(&directory).map_err(|_| "litzd is starting; try again shortly")?;
+    let mut identity = identity::load_or_create(&path)?;
+    let names = identity
+        .trust
+        .phones
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
+    identity.trust = Trust::default();
+    identity::save(&path, &identity)?;
+    Ok(names)
 }
 
 /// `None` when no daemon is listening.
@@ -154,6 +195,18 @@ async fn handle<S: AsyncRead + AsyncWrite>(stream: S, hub: &Arc<Hub>) -> io::Res
                 },
                 Err(error) => Response::Error(error),
             }
+        }
+        Ok(Request::ForgetAll) => {
+            let mut names = Vec::new();
+            let mut failed = None;
+            for phone in hub.trust().phones {
+                if let Err(error) = hub.forget(&phone.certificate).await {
+                    failed = Some(error.to_string());
+                    break;
+                }
+                names.push(phone.name);
+            }
+            failed.map_or(Response::ForgotAll(names), Response::Error)
         }
         Err(_) => Response::Error("invalid request".into()),
     };

@@ -4,6 +4,7 @@ pub const HELP: &str = "litzd — Litz Audio background agent
   litzd [--mirror NAME|default]   run the agent; --mirror overrides the saved output
   litzd devices                   list paired phones
   litzd forget NAME|ID            unpair a phone
+  litzd forget --all              unpair every phone
   litzd --version
 Phones pair by tapping this computer in the Litz app, then allowing the prompt on this computer.";
 
@@ -12,6 +13,7 @@ pub enum Command {
     Version,
     Devices,
     Forget(String),
+    ForgetAll,
     Run { tone: bool, route: Option<Route> },
 }
 
@@ -20,6 +22,7 @@ pub fn parse(args: Vec<String>) -> Result<Command, &'static str> {
         [only] if matches!(only.as_str(), "--help" | "-h") => return Ok(Command::Help),
         [only] if matches!(only.as_str(), "--version" | "-V") => return Ok(Command::Version),
         [only] if only == "devices" => return Ok(Command::Devices),
+        [command, all] if command == "forget" && all == "--all" => return Ok(Command::ForgetAll),
         [command, phone] if command == "forget" && !phone.is_empty() => {
             return Ok(Command::Forget(phone.clone()));
         }
@@ -112,6 +115,7 @@ mod tests {
         assert!(parse_args("--version extra").is_err());
         assert!(matches!(parse_args("devices"), Ok(Command::Devices)));
         assert!(matches!(parse_args("forget Pixel"), Ok(Command::Forget(name)) if name == "Pixel"));
+        assert!(matches!(parse_args("forget --all"), Ok(Command::ForgetAll)));
         assert!(parse_args("forget").is_err());
     }
 }

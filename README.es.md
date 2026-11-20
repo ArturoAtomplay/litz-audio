@@ -64,7 +64,7 @@ Si el teléfono no ve la computadora, prueba con **Vincular por dirección IP** 
 
 Con el micrófono activado, la PC también oye lo que suene por el altavoz del teléfono. Con audífonos no pasa. Sin ellos, el modo de grabación **Llamadas y reuniones** en Ajustes usa la cancelación de eco del teléfono si la tiene, y Android trata tu voz como en una llamada.
 
-Para ver o quitar teléfonos vinculados desde la computadora, usa `litzd devices` o `litzd forget NOMBRE`.
+Para ver o quitar teléfonos vinculados desde la computadora, usa `litzd devices` o `litzd forget NOMBRE` (`litzd forget --all` quita todos).
 
 ## Compilar
 
