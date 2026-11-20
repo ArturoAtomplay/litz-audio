@@ -426,7 +426,7 @@ async fn pair(
     if litz_core::session::commitment(&phone_nonce) != commitment {
         return Err("pairing commitment mismatch".into());
     }
-    let who = format!("\u{201c}{name}\u{201d} ({})", phone_id(&cert));
+    let who = format!("\"{name}\" ({})", phone_id(&cert));
     info!("{who} asks to pair from {}", c.remote_address().ip());
     let code =
         litz_core::session::verification_code(&cert, &hub.certificate(), &phone_nonce, &nonce);
@@ -473,7 +473,7 @@ async fn pair(
                 PairOutcome::Accepted
             }
             Err(error) => {
-                warning!("could not save approved phone “{name}”: {error}");
+                warning!("could not save approved phone \"{name}\": {error}");
                 PairOutcome::Cancelled
             }
         },

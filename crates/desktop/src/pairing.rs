@@ -114,7 +114,7 @@ impl Hub {
         let id = phone_id(cert);
         let identity = self.identity.lock().unwrap();
         match identity.trust.phones.iter().find(|p| p.certificate == cert) {
-            Some(phone) => format!("\u{201c}{}\u{201d} ({id})", phone.name),
+            Some(phone) => format!("\"{}\" ({id})", phone.name),
             None => format!("an unpaired phone ({id})"),
         }
     }
@@ -287,7 +287,7 @@ impl Hub {
             .find(|p| p.certificate == cert)
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Phone".into());
-        let who = format!("\u{201c}{name}\u{201d} ({})", phone_id(cert));
+        let who = format!("\"{name}\" ({})", phone_id(cert));
         let previous = lease.hand_to(Some(Owner {
             certificate: cert.to_vec(),
             name,
@@ -298,7 +298,7 @@ impl Hub {
             Some(old) if old.certificate == cert => {
                 info!("{who} moved its audio to a new connection");
             }
-            Some(old) => info!("{who} took the audio from \u{201c}{}\u{201d}", old.name),
+            Some(old) => info!("{who} took the audio from \"{}\"", old.name),
         }
         if let Some(previous) = previous {
             previous
@@ -312,7 +312,7 @@ impl Hub {
         if lease.held_by(connection)
             && let Some(owner) = lease.hand_to(None)
         {
-            info!("\u{201c}{}\u{201d} released the audio", owner.name);
+            info!("\"{}\" released the audio", owner.name);
         }
     }
 }
