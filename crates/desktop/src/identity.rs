@@ -52,19 +52,20 @@ fn save_with_sync(
     Ok(())
 }
 /// Commit credentials before delivery, holding the agent lock through both.
-pub fn agent_lock(dir: &Path) -> Result<fs::File> {
+/// The lock held by the litzd that serves phones, or None while another
+/// process holds it.
+pub fn agent_lock(dir: &Path) -> Result<Option<fs::File>> {
     let lock = crate::platform::private_options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(dir.join("agent.lock"))?;
-    if lock.try_lock().is_err() {
-        return Err(
-            "Stop the running Litz service before changing installation credentials".into(),
-        );
+    match lock.try_lock() {
+        Ok(()) => Ok(Some(lock)),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(error)) => Err(error.into()),
     }
-    Ok(lock)
 }
 
 pub fn load_or_create(path: &Path) -> Result<Identity> {

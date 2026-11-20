@@ -36,20 +36,23 @@ impl CommandSender {
 #[cfg(windows)]
 pub type CommandSender = wasapi::CommandSender;
 
-#[cfg(target_os = "linux")]
 pub fn run(
     tone: bool,
     route: Option<litz_core::protocol::Route>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if !tone && pulse::serves_audio() {
-        crate::log::info!("using PulseAudio");
-        return pulse::run(route);
+    let claim = crate::server::claim()?;
+    #[cfg(target_os = "linux")]
+    {
+        if !tone && pulse::serves_audio() {
+            crate::log::info!("using PulseAudio");
+            return pulse::run(&claim, route);
+        }
+        crate::log::info!("using PipeWire");
+        pipewire::run(&claim, tone, route)
     }
-    crate::log::info!("using PipeWire");
-    pipewire::run(tone, route)
+    #[cfg(windows)]
+    wasapi::run(&claim, tone, route)
 }
-#[cfg(windows)]
-pub use wasapi::run;
 
 #[cfg(target_os = "linux")]
 pub const PLATFORM: &str = "Linux";

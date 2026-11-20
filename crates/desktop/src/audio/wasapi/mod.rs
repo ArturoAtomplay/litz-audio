@@ -23,13 +23,16 @@ use windows_sys::Win32::System::Threading::{
 
 static STOP: AtomicBool = AtomicBool::new(false);
 static STOP_SIGNAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-unsafe extern "system" fn shutdown(_: u32) -> i32 {
+fn stop() {
     STOP.store(true, Ordering::Release);
     let signal = STOP_SIGNAL.load(Ordering::Acquire);
     if !signal.is_null() {
         // SAFETY: run() clears STOP_SIGNAL before it closes the event.
         unsafe { SetEvent(signal) };
     }
+}
+unsafe extern "system" fn shutdown(_: u32) -> i32 {
+    stop();
     1
 }
 
@@ -286,7 +289,7 @@ fn serve_devices(
     }
 }
 
-pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
+pub fn run(claim: &crate::server::Claim, tone: bool, route: Option<Route>) -> Result<()> {
     if tone {
         return Err("The PipeWire tone fixture is Linux-only".into());
     }
@@ -324,23 +327,27 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     let (outputs_changed, outputs) = tokio::sync::watch::channel(());
     let (mut resolved, output) =
         tokio::sync::watch::channel(capture.as_ref().map(|c| c.id.clone()));
-    let _network = crate::server::start(Ports {
-        mic,
-        mic_available: mic_available.clone(),
-        capture: Some(samples),
-        capture_fault: fault.clone(),
-        demand: requests,
-        wake: wake.clone(),
-        reset: reset.clone(),
-        route: effective.clone(),
-        preferred: effective,
-        resolved: Some(output),
-        outputs,
-        revision: saved.revision,
-        voice: saved.voice,
-        commands,
-        command_slots: Arc::new(tokio::sync::Semaphore::new(1)),
-    })?;
+    let network = crate::server::start(
+        claim,
+        Ports {
+            mic,
+            mic_available: mic_available.clone(),
+            capture: Some(samples),
+            capture_fault: fault.clone(),
+            demand: requests,
+            wake: wake.clone(),
+            reset: reset.clone(),
+            route: effective.clone(),
+            preferred: effective,
+            resolved: Some(output),
+            outputs,
+            revision: saved.revision,
+            voice: saved.voice,
+            commands,
+            command_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+        },
+        stop,
+    )?;
     let signal = Arc::new(Signal::new()?);
     let (prepared, ready) = mpsc::sync_channel(4);
     let prepared = Handoff {
@@ -483,6 +490,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         unsafe { WaitForMultipleObjects(count as u32, events.as_ptr(), 0, INFINITE) };
     }
     STOP_SIGNAL.store(std::ptr::null_mut(), Ordering::Release);
+    network.finish()?;
     if !STOP.load(Ordering::Acquire) {
         return Err("the device thread stopped".into());
     }

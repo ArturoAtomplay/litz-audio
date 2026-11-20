@@ -351,7 +351,7 @@ fn stopped() -> bool {
     STOPPED.load(Ordering::Acquire)
 }
 
-pub fn run(route: Option<Route>) -> Result<()> {
+pub fn run(claim: &crate::server::Claim, route: Option<Route>) -> Result<()> {
     let stop_wake = Wake::try_new()?;
     STOP_WAKE.store(stop_wake.as_raw_fd(), Ordering::Release);
     for signal in [libc::SIGTERM, libc::SIGINT] {
@@ -367,11 +367,12 @@ pub fn run(route: Option<Route>) -> Result<()> {
     let mut backoff = Backoff::default();
     loop {
         let started = Instant::now();
-        if let Err(error) = serve(route.as_ref(), &stop_wake) {
-            warning!("{error}");
-        }
+        let served = serve(claim, route.as_ref(), &stop_wake);
         if stopped() {
-            return Ok(());
+            return served;
+        }
+        if let Err(error) = served {
+            warning!("{error}");
         }
         if started.elapsed() >= Duration::from_secs(30) {
             backoff = Backoff::default();
@@ -393,7 +394,7 @@ pub fn run(route: Option<Route>) -> Result<()> {
     }
 }
 
-fn serve(route: Option<&Route>, stop_wake: &Wake) -> Result<()> {
+fn serve(claim: &crate::server::Claim, route: Option<&Route>, stop_wake: &Wake) -> Result<()> {
     let saved = crate::settings::load()?;
     let default_route = Route::Mirror { name: None };
     let route = route
@@ -407,10 +408,11 @@ fn serve(route: Option<&Route>, stop_wake: &Wake) -> Result<()> {
         pulse::mainloop::events::io::FlagSet::INPUT,
         Box::new(move |_, _, _| drained.drain()),
     );
-    serve_connected(&mut server, route, saved)
+    serve_connected(claim, &mut server, route, saved)
 }
 
 fn serve_connected(
+    claim: &crate::server::Claim,
     server: &mut Server,
     route: Route,
     saved: crate::settings::Settings,
@@ -483,7 +485,7 @@ fn serve_connected(
         }),
         command_slots: Arc::new(tokio::sync::Semaphore::new(1)),
     };
-    let network = crate::server::start_network(ports);
+    let network = crate::server::start(claim, ports, || stop(0))?;
     let result = (|| {
         while !stopped() {
             step(&mut server.mainloop, None)?;
@@ -508,13 +510,14 @@ fn serve_connected(
         }
         Ok(())
     })();
-    drop(network);
+    let finished = network.finish();
     if let Some(capture) = capture {
         capture.close(server);
     }
     microphone.close(server);
     server.finish();
     control.report();
+    finished?;
     result
 }
 

@@ -146,6 +146,37 @@ enum Sound<'a> {
     Pulse { script: &'a str },
 }
 
+/// litzd confined to a test's private sound server, with its state under `state`.
+fn litzd(runtime: &std::path::Path, state: &std::path::Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_litzd"));
+    command
+        .env("LITZ_DISABLE_DISCOVERY", "1")
+        // Keep the private fixture from advertising on the user's LAN.
+        .env("PATH", runtime)
+        .env("XDG_STATE_HOME", state)
+        .env("XDG_RUNTIME_DIR", runtime)
+        .env("PIPEWIRE_RUNTIME_DIR", runtime)
+        .env("HOME", runtime)
+        .env("XDG_CONFIG_HOME", runtime)
+        .env_remove("PULSE_SERVER")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS");
+    command
+}
+
+async fn exited(mut child: Child) -> std::process::Output {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("litzd kept running");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    child.wait_with_output().unwrap()
+}
+
 /// Starts a private sound server and the agent, and pairs one phone with it.
 async fn start(name: &str, sound: Sound<'_>) -> Agent {
     let mut nonce = [0; 8];
@@ -229,7 +260,6 @@ async fn start(name: &str, sound: Sound<'_>) -> Agent {
     let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
     drop(socket);
-    let binary = env!("CARGO_BIN_EXE_litzd");
     let desktop = rcgen::generate_simple_self_signed(vec!["litz.local".into()]).unwrap();
     let phone = rcgen::generate_simple_self_signed(vec!["litz.local".into()]).unwrap();
     let cert = desktop.cert.der().to_vec();
@@ -247,19 +277,7 @@ async fn start(name: &str, sound: Sound<'_>) -> Agent {
     )
     .unwrap();
     fixture.children.push(
-        Command::new(binary)
-            .env("LITZ_DISABLE_DISCOVERY", "1")
-            // Keep the private fixture from advertising on the user's LAN.
-            .env("PATH", &directory)
-            .env("XDG_STATE_HOME", &directory)
-            .env("XDG_RUNTIME_DIR", &directory)
-            .env("PIPEWIRE_RUNTIME_DIR", &directory)
-            .env("HOME", &directory)
-            .env("XDG_CONFIG_HOME", &directory)
-            .env_remove("PULSE_SERVER")
-            .env_remove("DISPLAY")
-            .env_remove("WAYLAND_DISPLAY")
-            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        litzd(&directory, &directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -1263,4 +1281,73 @@ async fn pulseaudio_serves_the_microphone_and_follows_the_default_output() {
         !pactl(&["list", "short", "modules"]).contains("litz."),
         "litzd left its devices behind"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires the pulseaudio executable; run in nix develop"]
+async fn a_second_litzd_leaves_the_running_microphone_alone() {
+    let agent = start("pulse-second", Sound::Pulse { script: PULSE }).await;
+    let modules = || {
+        let output = Command::new("pactl")
+            .args(["list", "short", "modules"])
+            .env("XDG_RUNTIME_DIR", &agent.directory)
+            .env("HOME", &agent.directory)
+            .env_remove("PULSE_SERVER")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let before = modules();
+    assert!(before.contains("litz.microphone"));
+    let second = litzd(&agent.directory, &agent.directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output = exited(second).await;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("litzd is already running"));
+    assert_eq!(modules(), before);
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires pipewire executable; run in nix develop"]
+async fn an_engine_that_cannot_listen_stops_litzd_with_its_cause() {
+    use std::os::unix::fs::PermissionsExt;
+    let agent = start(
+        "busy",
+        Sound::PipeWire {
+            config: ROUTES,
+            wireplumber: false,
+        },
+    )
+    .await;
+    let other = agent.directory.join("other");
+    let state = other.join("litz");
+    fs::create_dir_all(&state).unwrap();
+    for directory in [&other, &state] {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    fs::copy(
+        agent.state.join("identity.json"),
+        state.join("identity.json"),
+    )
+    .unwrap();
+    let busy = litzd(&agent.directory, &other)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output = exited(busy).await;
+    for file in ["identity.json", "settings.json", "agent.lock"] {
+        let _ = fs::remove_file(state.join(file));
+    }
+    let _ = fs::remove_dir(&state);
+    let _ = fs::remove_dir(&other);
+    assert!(!output.status.success());
+    let log = String::from_utf8_lossy(&output.stderr);
+    assert!(log.contains("in use"), "{log}");
 }

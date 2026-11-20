@@ -78,7 +78,20 @@ impl Ports {
 }
 pub struct Network {
     stop: Option<oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<transport::Result<()>>>,
+}
+impl Network {
+    /// Stops the engine and returns why it ended, if it failed first.
+    pub fn finish(mut self) -> Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        match self.thread.take().map(std::thread::JoinHandle::join) {
+            None | Some(Ok(Ok(()))) => Ok(()),
+            Some(Ok(Err(error))) => Err(error),
+            Some(Err(_)) => Err("the secure engine panicked".into()),
+        }
+    }
 }
 impl Drop for Network {
     fn drop(&mut self) {
@@ -90,11 +103,32 @@ impl Drop for Network {
         }
     }
 }
-pub fn start(ports: Ports) -> Result<Network> {
+/// The right to serve phones, which one litzd holds for its whole life.
+pub struct Claim {
+    _lock: fs::File,
+    path: PathBuf,
+}
+
+/// Taken before touching the sound server, whose leftovers from an earlier
+/// litzd are removed on start.
+pub fn claim() -> Result<Claim> {
     let directory = crate::identity::directory()?;
     fs::create_dir_all(&directory)?;
-    let lock = crate::identity::agent_lock(&directory)?;
-    let path = directory.join("identity.json");
+    let lock = crate::identity::agent_lock(&directory)?.ok_or("litzd is already running")?;
+    Ok(Claim {
+        _lock: lock,
+        path: directory.join("identity.json"),
+    })
+}
+
+/// Starts the engine that serves phones; `failed` asks the audio loop to stop
+/// if the engine ends with an error.
+pub fn start(
+    claim: &Claim,
+    ports: Ports,
+    failed: impl FnOnce() + Send + 'static,
+) -> Result<Network> {
+    let path = claim.path.clone();
     let identity = crate::identity::load_or_create(&path)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -103,26 +137,16 @@ pub fn start(ports: Ports) -> Result<Network> {
     let thread = std::thread::Builder::new()
         .name("litz-engine".into())
         .spawn(move || {
-            let _lock = lock;
-            if let Err(error) = runtime.block_on(listen(path, identity, ports, stopped)) {
-                error!("secure engine: {error}");
+            let result = runtime.block_on(listen(path, identity, ports, stopped));
+            if result.is_err() {
+                failed();
             }
+            result
         })?;
     Ok(Network {
         stop: Some(stop),
         thread: Some(thread),
     })
-}
-
-#[cfg(target_os = "linux")]
-pub fn start_network(ports: Ports) -> Option<Network> {
-    match start(ports) {
-        Ok(network) => Some(network),
-        Err(error) => {
-            error!("secure engine disabled: {error}");
-            None
-        }
-    }
 }
 
 async fn listen(
@@ -133,7 +157,8 @@ async fn listen(
 ) -> transport::Result<()> {
     crate::platform::raise_thread_priority().await;
     let config = transport::server(identity.certificate.clone(), identity.private_key.clone())?;
-    let endpoint = transport::server_endpoint(config, identity.bind)?;
+    let endpoint = transport::server_endpoint(config, identity.bind)
+        .map_err(|error| format!("cannot listen on {}: {error}", identity.bind))?;
     info!(
         "version {} listening on {} (UDP)",
         env!("CARGO_PKG_VERSION"),

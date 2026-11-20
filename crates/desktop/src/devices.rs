@@ -133,8 +133,7 @@ fn forget_saved(query: &str) -> Result<String> {
     if !path.exists() {
         return Err("no phones are paired".into());
     }
-    let _lock =
-        identity::agent_lock(&directory).map_err(|_| "litzd is starting; try again shortly")?;
+    let _lock = identity::agent_lock(&directory)?.ok_or("litzd is starting; try again shortly")?;
     let mut identity = identity::load_or_create(&path)?;
     let phone = find(&identity.trust, query)?;
     let name = phone.name.clone();
@@ -150,8 +149,7 @@ fn forget_all_saved() -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let _lock =
-        identity::agent_lock(&directory).map_err(|_| "litzd is starting; try again shortly")?;
+    let _lock = identity::agent_lock(&directory)?.ok_or("litzd is starting; try again shortly")?;
     let mut identity = identity::load_or_create(&path)?;
     let names = identity
         .trust

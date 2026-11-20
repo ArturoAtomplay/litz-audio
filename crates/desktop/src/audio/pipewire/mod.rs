@@ -15,7 +15,7 @@ use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
+pub fn run(claim: &crate::server::Claim, tone: bool, route: Option<Route>) -> Result<()> {
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
     let stopped = Rc::new(Cell::new(false));
@@ -36,11 +36,12 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     let mut backoff = Backoff::default();
     while !stopped.get() {
         let started = std::time::Instant::now();
-        if let Err(error) = serve(&mainloop, tone, route.as_ref()) {
-            warning!("{error}");
-        }
+        let served = serve(claim, &mainloop, &stopped, tone, route.as_ref());
         if stopped.get() {
-            break;
+            return served;
+        }
+        if let Err(error) = served {
+            warning!("{error}");
         }
         if started.elapsed() >= Duration::from_secs(30) {
             backoff = Backoff::default();
@@ -55,7 +56,13 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     Ok(())
 }
 
-fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>) -> Result<()> {
+fn serve(
+    claim: &crate::server::Claim,
+    mainloop: &pw::main_loop::MainLoopRc,
+    stopped: &Rc<Cell<bool>>,
+    tone: bool,
+    route: Option<&Route>,
+) -> Result<()> {
     let saved = crate::settings::load()?;
     let default_route = Route::Mirror { name: None };
     let route = route.or(saved.route.as_ref()).or(Some(&default_route));
@@ -150,18 +157,29 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
         commands: crate::audio::CommandSender::PipeWire(commands),
         command_slots: Arc::new(tokio::sync::Semaphore::new(1)),
     };
+    let (failed, failure) = pw::channel::channel::<()>();
+    let _failure = failure.attach(mainloop.loop_(), {
+        let (mainloop, stopped) = (mainloop.clone(), stopped.clone());
+        move |()| {
+            stopped.set(true);
+            mainloop.quit();
+        }
+    });
+    let failed = move || {
+        let _ = failed.send(());
+    };
     #[cfg(feature = "test-tone")]
-    let (fixture, _network) = if tone {
+    let (fixture, network) = if tone {
         (Some(super::tone::Fixture::new(ports.mic, true)), None)
     } else {
-        (None, crate::server::start_network(ports))
+        (None, Some(crate::server::start(claim, ports, failed)?))
     };
     #[cfg(feature = "test-tone")]
     let fixture_control = fixture.as_ref().map(|fixture| fixture.control());
     #[cfg(not(feature = "test-tone"))]
-    let _network = {
+    let network = {
         let _ = tone;
-        crate::server::start_network(ports)
+        Some(crate::server::start(claim, ports, failed)?)
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -285,6 +303,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
     mainloop.run();
     let _ = stream.disconnect();
     control.report();
+    network.map_or(Ok(()), crate::server::Network::finish)?;
     Ok(())
 }
 
