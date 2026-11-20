@@ -74,6 +74,7 @@ internal fun diagnostics(context: Context, ui: UiState, status: Snapshot): List<
         rate: Int,
         lowLatency: Int,
         exclusive: Int,
+        buffer: Int,
         xruns: Int,
         @StringRes xrunLabel: Int,
     ): List<Pair<String, String>> {
@@ -90,6 +91,7 @@ internal fun diagnostics(context: Context, ui: UiState, status: Snapshot): List<
                     if (exclusive == 1) R.string.diagnostics_sharing_exclusive
                     else R.string.diagnostics_sharing_shared
                 ),
+            text(R.string.diagnostics_buffer) to text(R.string.unit_frames, "$buffer"),
             (text(xrunLabel) to "$xruns").takeIf { xruns >= 0 },
         )
     }
@@ -101,6 +103,7 @@ internal fun diagnostics(context: Context, ui: UiState, status: Snapshot): List<
                     it.inputRate,
                     it.inputLowLatency,
                     it.inputExclusive,
+                    it.inputBuffer,
                     it.inputXruns,
                     R.string.diagnostics_overruns,
                 )
@@ -113,6 +116,7 @@ internal fun diagnostics(context: Context, ui: UiState, status: Snapshot): List<
                     it.outputRate,
                     it.outputLowLatency,
                     it.outputExclusive,
+                    it.outputBuffer,
                     it.outputXruns,
                     R.string.diagnostics_underruns,
                 )
@@ -187,16 +191,12 @@ internal fun diagnostics(context: Context, ui: UiState, status: Snapshot): List<
                             number(listening?.concealed?.toLong()),
                     ) +
                         output +
-                        listOfNotNull(
-                            audio?.let {
-                                text(R.string.diagnostics_buffer) to
-                                    text(R.string.unit_frames, "${it.outputBuffer}")
-                            },
+                        listOf(
                             text(R.string.diagnostics_callback) to
                                 text(
                                     R.string.unit_frames,
                                     number(details?.callbackFrames?.toLong()),
-                                ),
+                                )
                         ),
             )
         )
