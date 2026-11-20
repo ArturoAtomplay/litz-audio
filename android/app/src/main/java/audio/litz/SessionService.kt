@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo
 import android.media.*
 import android.net.wifi.WifiManager
 import android.os.*
+import android.util.Log
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Immutable
 import audio.litz.native.Engine
@@ -391,8 +392,26 @@ class SessionService : Service() {
                         return@launch
                     }
                 seen = update.version
+                Log.i(TAG, describe(update.status))
                 mutex.withLock { if (active && engine === opened) publish(update.status) }
             }
+        }
+
+    private fun describe(status: Status): String = buildString {
+        append(status.state.name.lowercase())
+        status.connectedEndpoint?.let { append(" to ").append(it) }
+        if (status.microphone.running) append(", microphone on")
+        if (status.listening.running) append(", listening")
+        status.error?.let { append(", error: ").append(name(it)) }
+        status.microphone.error?.let { append(", microphone: ").append(name(it)) }
+        status.listening.error?.let { append(", listening: ").append(name(it)) }
+    }
+
+    private fun name(failure: Failure): String =
+        when (failure) {
+            is Failure.ComputerRefused -> "ComputerRefused(${failure.reason})"
+            is Failure.Internal -> "Internal(${failure.detail})"
+            else -> failure::class.simpleName.orEmpty()
         }
 
     /** Fresh readings for screens that show them; state changes arrive by themselves. */
@@ -688,6 +707,7 @@ class SessionService : Service() {
         internal const val STOP = "audio.litz.STOP"
         private const val MUTE = "audio.litz.MUTE"
         private const val CHANNEL = "session"
+        private const val TAG = "Litz"
         // Hidden in the SDK, but sent to every app.
         private const val TETHER_STATE_CHANGED = "android.net.conn.TETHER_STATE_CHANGED"
         private const val USB_STATE = "android.hardware.usb.action.USB_STATE"
