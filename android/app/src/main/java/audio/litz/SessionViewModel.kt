@@ -217,6 +217,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 service = bound
                 reconnectIfIdle()
                 bound.watchUsbWhenIdle = { mutable.value.discovering }
+                bound.checkUsb()
                 usbWatch =
                     viewModelScope.launch {
                         var previous = UsbLink()
@@ -325,6 +326,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
 
     internal fun startDiscovery() {
         mutable.update { it.copy(discovering = true) }
+        service?.checkUsb()
         runCatching {
                 discovery.start()
                 if (!networkCallbackRegistered) {

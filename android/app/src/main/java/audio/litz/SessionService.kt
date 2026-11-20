@@ -22,6 +22,7 @@ import audio.litz.native.changesAudioPath
 import audio.litz.native.defaultPort
 import java.util.concurrent.Executors
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -68,7 +69,13 @@ class SessionService : Service() {
     /** Whether the screen wants the tether watched while nothing is streaming. */
     internal var watchUsbWhenIdle: () -> Boolean = { false }
     private var wifiFallback: String? = null
-    private var lastUsbAttempt = 0L
+    private val usbChecks = Channel<Unit>(Channel.CONFLATED)
+    private val usbChanged =
+        object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                checkUsb()
+            }
+        }
     private lateinit var wake: PowerManager.WakeLock
     // Wi-Fi power save delivers incoming audio in ~100 ms beacon bursts.
     private lateinit var wifiLocks: List<WifiManager.WifiLock>
@@ -150,84 +157,94 @@ class SessionService : Service() {
         else
             @Suppress("DEPRECATION")
             registerReceiver(noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+        val tethering =
+            IntentFilter().apply {
+                addAction(TETHER_STATE_CHANGED)
+                addAction(USB_STATE)
+            }
+        // Other apps may send these too; a spoofed one only triggers a look.
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbChanged, tethering, RECEIVER_EXPORTED)
+        else registerReceiver(usbChanged, tethering)
         scope.launch {
-            var idleTurn = false
             while (isActive) {
-                delay(1500)
-                if (!desired.mic && !desired.playback) {
-                    // Half as often while nothing is streaming.
-                    idleTurn = !idleTurn
-                    if (!idleTurn || !watchUsbWhenIdle()) continue
-                }
-                val route =
-                    try {
-                        withContext(Dispatchers.IO) {
-                            val interfaces = UsbRoutes.interfaces()
-                            val store = IdentityStore(this@SessionService)
-                            val selected = store.selectedFingerprint()
-                            val saved = store.saved().firstOrNull { it.fingerprint == selected }
-                            Triple(
-                                interfaces,
-                                saved,
-                                saved?.let {
-                                    UsbMdns.resolve(
-                                        it.fingerprint,
-                                        it.endpoint.substringAfterLast(':').toIntOrNull()
-                                            ?: defaultPort().toInt(),
-                                        interfaces,
-                                    )
-                                },
-                            )
-                        }
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (_: Exception) {
-                        continue
-                    }
-                val (interfaces, saved, found) = route
-                val streaming = desired.mic || desired.playback
-                if (!streaming && !watchUsbWhenIdle()) continue
-                var endpoint = usbLink.value.endpoint
-                if (saved != null && found != null) {
-                    if (endpoint != (saved.fingerprint to found)) {
-                        if (interfaces.none { it.subnet.contains(saved.endpoint) })
-                            wifiFallback = saved.endpoint
-                        endpoint = saved.fingerprint to found
-                        lastUsbAttempt = 0L
-                        if (!streaming) {
-                            withContext(Dispatchers.IO) {
-                                IdentityStore(this@SessionService)
-                                    .updateAddress(saved.fingerprint, found)
-                            }
-                            address(found)
-                        }
-                    }
-                    val current = mutable.value.status?.connectedEndpoint
-                    if ((streaming || current != null) && current != found) {
-                        val now = SystemClock.elapsedRealtime()
-                        if (now - lastUsbAttempt >= 5000L) {
-                            lastUsbAttempt = now
-                            address(found)
-                        }
-                    } else if (streaming && saved.endpoint != found)
-                        withContext(Dispatchers.IO) {
-                            IdentityStore(this@SessionService)
-                                .updateAddress(saved.fingerprint, found)
-                        }
-                } else if (interfaces.isEmpty() && endpoint != null) {
-                    endpoint = null
-                    if (saved != null)
-                        wifiFallback?.let { fallback ->
-                            withContext(Dispatchers.IO) {
-                                IdentityStore(this@SessionService)
-                                    .updateAddress(saved.fingerprint, fallback)
-                            }
-                            address(fallback)
-                        }
-                }
-                usbLink.value = UsbLink(interfaces.map { it.subnet }, endpoint)
+                if (followUsb()) withTimeoutOrNull(5000) { usbChecks.receive() }
+                else usbChecks.receive()
             }
         }
+    }
+
+    /**
+     * Moves the session onto USB tethering when the computer answers there, and back to Wi-Fi when
+     * the tether goes. Whether to look again soon: USB is up but not in use yet.
+     */
+    private suspend fun followUsb(): Boolean {
+        val streaming = desired.mic || desired.playback
+        if (!streaming && !watchUsbWhenIdle()) return false
+        val (interfaces, saved, found) =
+            try {
+                withContext(Dispatchers.IO) {
+                    val interfaces = UsbRoutes.interfaces()
+                    val store = IdentityStore(this@SessionService)
+                    val selected = store.selectedFingerprint()
+                    val saved = store.saved().firstOrNull { it.fingerprint == selected }
+                    Triple(
+                        interfaces,
+                        saved,
+                        saved?.let {
+                            UsbMdns.resolve(
+                                it.fingerprint,
+                                it.endpoint.substringAfterLast(':').toIntOrNull()
+                                    ?: defaultPort().toInt(),
+                                interfaces,
+                            )
+                        },
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                return true
+            }
+        var endpoint = usbLink.value.endpoint
+        var again = false
+        if (saved != null && found != null) {
+            if (endpoint != (saved.fingerprint to found)) {
+                if (interfaces.none { it.subnet.contains(saved.endpoint) })
+                    wifiFallback = saved.endpoint
+                endpoint = saved.fingerprint to found
+                if (!streaming) {
+                    withContext(Dispatchers.IO) {
+                        IdentityStore(this@SessionService).updateAddress(saved.fingerprint, found)
+                    }
+                    address(found)
+                }
+            }
+            val current = mutable.value.status?.connectedEndpoint
+            if ((streaming || current != null) && current != found) {
+                address(found)
+                again = true
+            } else if (streaming && saved.endpoint != found)
+                withContext(Dispatchers.IO) {
+                    IdentityStore(this@SessionService).updateAddress(saved.fingerprint, found)
+                }
+        } else if (interfaces.isEmpty() && endpoint != null) {
+            endpoint = null
+            if (saved != null)
+                wifiFallback?.let { fallback ->
+                    withContext(Dispatchers.IO) {
+                        IdentityStore(this@SessionService)
+                            .updateAddress(saved.fingerprint, fallback)
+                    }
+                    address(fallback)
+                }
+        } else again = interfaces.isNotEmpty() && saved != null
+        usbLink.value = UsbLink(interfaces.map { it.subnet }, endpoint)
+        return again
+    }
+
+    /** Looks at USB tethering again after something it depends on changed. */
+    internal fun checkUsb() {
+        usbChecks.trySend(Unit)
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -277,6 +294,7 @@ class SessionService : Service() {
             mutex.withLock {
                 val changingAudioPath = changesAudioPath(desired, settings)
                 desired = settings
+                checkUsb()
                 localError = reason
                 mutable.value =
                     mutable.value.copy(
@@ -398,6 +416,7 @@ class SessionService : Service() {
         }
 
     private suspend fun publish(status: Status?, reason: UiText? = null) {
+        if (status?.connectedEndpoint != mutable.value.status?.connectedEndpoint) checkUsb()
         status?.let { desired = it.desired }
         val error = reason ?: status?.error?.let { failureText(it) } ?: localError
         val reachable =
@@ -651,6 +670,7 @@ class SessionService : Service() {
         scope.cancel()
         audio.unregisterAudioDeviceCallback(devices)
         unregisterReceiver(noisy)
+        unregisterReceiver(usbChanged)
         releaseLocks()
         synchronized(lifetime) { engine?.shutdown() }
         executor.execute {
@@ -668,6 +688,9 @@ class SessionService : Service() {
         internal const val STOP = "audio.litz.STOP"
         private const val MUTE = "audio.litz.MUTE"
         private const val CHANNEL = "session"
+        // Hidden in the SDK, but sent to every app.
+        private const val TETHER_STATE_CHANGED = "android.net.conn.TETHER_STATE_CHANGED"
+        private const val USB_STATE = "android.hardware.usb.action.USB_STATE"
         private const val NOTIFICATION = 1
     }
 }
