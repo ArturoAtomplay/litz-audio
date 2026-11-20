@@ -371,19 +371,16 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                                 synchronized(pairLifetime) { this@SessionViewModel.pairing = it }
                             }
                         }
+                    var seen = withContext(Dispatchers.IO) { pairing.state() }
                     while (true) {
-                        when (val state = withContext(Dispatchers.IO) { pairing.state() }) {
-                            is PairingState.Connecting -> delay(200)
-                            is PairingState.Reviewing -> {
+                        when (val state = seen) {
+                            is PairingState.Connecting -> {}
+                            is PairingState.Reviewing ->
                                 mutable.update { it.copy(pairingCode = state.code) }
-                                delay(200)
-                            }
-                            is PairingState.Confirming -> {
+                            is PairingState.Confirming ->
                                 mutable.update {
                                     it.copy(pairingCode = state.code, pairingConfirm = true)
                                 }
-                                delay(200)
-                            }
                             is PairingState.Accepted -> {
                                 withContext(Dispatchers.IO) {
                                     store.remember(computer.name, state.certificate, state.endpoint)
@@ -412,6 +409,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                                 break
                             }
                         }
+                        val previous = seen
+                        seen = withContext(Dispatchers.IO) { pairing.nextState(previous) }
                     }
                 } catch (_: CancellationException) {
                     message(UiText(R.string.pairing_cancelled))

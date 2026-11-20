@@ -7,7 +7,7 @@ use litz_core::{
 };
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     thread::JoinHandle,
     time::Duration,
 };
@@ -71,9 +71,21 @@ pub fn manual_endpoint(input: String) -> Option<SocketAddr> {
     reachable(&address).then_some(address)
 }
 
+/// The pairing's state, which `next_state` waits on.
+struct Shared {
+    state: Mutex<PairingState>,
+    changed: Condvar,
+}
+impl Shared {
+    fn set(&self, next: PairingState) {
+        *self.state.lock().unwrap() = next;
+        self.changed.notify_all();
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct Pairing {
-    state: Arc<Mutex<PairingState>>,
+    state: Arc<Shared>,
     cancel: Arc<Notify>,
     confirm: Arc<Notify>,
     worker: Option<JoinHandle<()>>,
@@ -101,7 +113,10 @@ impl Pairing {
         {
             return Err(invalid("invalid pairing candidate or identity"));
         }
-        let state = Arc::new(Mutex::new(PairingState::Connecting));
+        let state = Arc::new(Shared {
+            state: Mutex::new(PairingState::Connecting),
+            changed: Condvar::new(),
+        });
         let cancel = Arc::new(Notify::new());
         let confirm = Arc::new(Notify::new());
         let worker_state = state.clone();
@@ -125,9 +140,9 @@ impl Pairing {
                             worker_confirm,
                         ))
                     });
-                *worker_state.lock().unwrap() = result.unwrap_or_else(|e| PairingState::Failed {
+                worker_state.set(result.unwrap_or_else(|e| PairingState::Failed {
                     failure: Failure::of(e.as_ref()),
-                });
+                }));
             })
             .map_err(|error| Failure::of(&error))?;
         Ok(Arc::new(Self {
@@ -139,12 +154,25 @@ impl Pairing {
     }
 
     pub fn state(&self) -> PairingState {
-        self.state.lock().unwrap().clone()
+        self.state.state.lock().unwrap().clone()
+    }
+
+    /// Blocks until the state is no longer `seen`.
+    pub fn next_state(&self, seen: PairingState) -> PairingState {
+        let state = self.state.state.lock().unwrap();
+        self.state
+            .changed
+            .wait_while(state, |state| *state == seen)
+            .unwrap()
+            .clone()
     }
 
     /// The person saw the same code on their computer.
     pub fn confirm(&self) {
-        if matches!(*self.state.lock().unwrap(), PairingState::Confirming { .. }) {
+        if matches!(
+            *self.state.state.lock().unwrap(),
+            PairingState::Confirming { .. }
+        ) {
             self.confirm.notify_one();
         }
     }
@@ -168,7 +196,7 @@ async fn pair(
     address: SocketAddr,
     expected: String,
     name: String,
-    state: Arc<Mutex<PairingState>>,
+    state: Arc<Shared>,
     cancel: Arc<Notify>,
     confirm: Arc<Notify>,
 ) -> Result<PairingState> {
@@ -199,7 +227,7 @@ async fn exchange(
     address: SocketAddr,
     expected: &str,
     name: String,
-    state: &Mutex<PairingState>,
+    state: &Shared,
     confirm: &Notify,
 ) -> Result<PairingState> {
     let connection = tokio::time::timeout(
@@ -236,7 +264,7 @@ async fn exchange(
         .write(&Record::new(1, Message::PairReveal { nonce }))
         .await?;
     let code = verification_code(phone, &desktop, &nonce, &desktop_nonce);
-    *state.lock().unwrap() = PairingState::Reviewing { code: code.clone() };
+    state.set(PairingState::Reviewing { code: code.clone() });
     let approval = litz_core::protocol::APPROVAL_WINDOW + Duration::from_secs(10);
     let reply = tokio::time::timeout(approval, control.read()).await??;
     let outcome = match reply {
@@ -253,7 +281,7 @@ async fn exchange(
     };
     match outcome {
         PairOutcome::Accepted => {
-            *state.lock().unwrap() = PairingState::Confirming { code };
+            state.set(PairingState::Confirming { code });
             confirm.notified().await;
             Ok(PairingState::Accepted {
                 certificate: desktop,
@@ -363,7 +391,10 @@ mod tests {
                 address,
                 expected,
                 "Test phone".into(),
-                Arc::new(Mutex::new(PairingState::Connecting)),
+                Arc::new(Shared {
+                    state: Mutex::new(PairingState::Connecting),
+                    changed: Condvar::new(),
+                }),
                 Arc::new(Notify::new()),
                 confirm,
             ),
@@ -383,22 +414,26 @@ mod tests {
             "Test phone".into(),
         )?;
         pairing.confirm();
-        let reached = async {
-            while !matches!(pairing.state(), PairingState::Confirming { .. }) {
-                assert!(!matches!(pairing.state(), PairingState::Accepted { .. }));
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        };
-        tokio::time::timeout(Duration::from_secs(5), reached).await?;
+        let mut state = pairing.state();
+        while !matches!(state, PairingState::Confirming { .. }) {
+            assert!(!matches!(state, PairingState::Accepted { .. }));
+            let waiting = pairing.clone();
+            state = tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::task::spawn_blocking(move || waiting.next_state(state)),
+            )
+            .await??;
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(matches!(pairing.state(), PairingState::Confirming { .. }));
         pairing.confirm();
-        let pinned = async {
-            while !matches!(pairing.state(), PairingState::Accepted { .. }) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        };
-        tokio::time::timeout(Duration::from_secs(5), pinned).await?;
+        let waiting = pairing.clone();
+        let pinned = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || waiting.next_state(state)),
+        )
+        .await??;
+        assert!(matches!(pinned, PairingState::Accepted { .. }));
         listener.abort();
         drop(pairing);
         Ok(())
