@@ -79,6 +79,7 @@ internal fun DevicesApp(
     refreshRoutes: () -> Unit = {},
     voice: (ULong, VoiceSettings) -> Unit = { _, _ -> },
     refreshReadings: () -> Unit = {},
+    microphoneLevel: () -> Float? = { null },
 ) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
     BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
@@ -202,7 +203,16 @@ internal fun DevicesApp(
                             refresh,
                         )
                     Screen.Settings ->
-                        SettingsScreen(ui, status, busy, edit, apply, voice, refreshReadings)
+                        SettingsScreen(
+                            ui,
+                            status,
+                            busy,
+                            edit,
+                            apply,
+                            voice,
+                            refreshReadings,
+                            microphoneLevel,
+                        )
                 }
             }
         }
@@ -686,6 +696,7 @@ private fun SettingsScreen(
     apply: () -> Unit,
     voice: (ULong, VoiceSettings) -> Unit,
     refreshReadings: () -> Unit,
+    microphoneLevel: () -> Float?,
 ) {
     LaunchedEffect(Unit) {
         while (true) {
@@ -742,7 +753,7 @@ private fun SettingsScreen(
             enabled = !busy && !status.inUse && status.connected,
             supported = routes.suppressionAlgorithms,
             failure = ui.session.error,
-            inputRms = status.microphoneRms,
+            inputLevel = microphoneLevel.takeIf { status.running(0) },
             apply = voice,
         )
     SectionHeader(stringResource(R.string.about))

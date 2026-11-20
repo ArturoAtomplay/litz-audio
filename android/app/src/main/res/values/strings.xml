@@ -127,8 +127,7 @@
     <string name="sensitivity_manual_value">Manual · %1$d dBFS</string>
     <string name="voice_threshold">Voice threshold</string>
     <string name="voice_threshold_hint">Lower picks up quieter speech. Higher blocks more background sound.</string>
-    <string name="input_level">Input level</string>
-    <string name="decibels_full_scale">%1$d dBFS</string>
+    <string name="voice_threshold_level_hint">The bar shows your microphone and lights up when it passes the threshold. Lower picks up quieter speech.</string>
     <string name="equalizer">Equalizer</string>
     <string name="equalizer_low">Low</string>
     <string name="equalizer_mid">Mid</string>

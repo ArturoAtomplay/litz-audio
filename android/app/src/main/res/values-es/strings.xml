@@ -124,8 +124,7 @@
     <string name="sensitivity_manual_value">Manual · %1$d dBFS</string>
     <string name="voice_threshold">Umbral de voz</string>
     <string name="voice_threshold_hint">Más bajo capta voz más suave. Más alto bloquea más sonido de fondo.</string>
-    <string name="input_level">Nivel de entrada</string>
-    <string name="decibels_full_scale">%1$d dBFS</string>
+    <string name="voice_threshold_level_hint">La barra muestra tu micrófono y se ilumina cuando supera el umbral. Más bajo capta voz más suave.</string>
     <string name="equalizer">Ecualizador</string>
     <string name="equalizer_low">Graves</string>
     <string name="equalizer_mid">Medios</string>

@@ -1,11 +1,14 @@
 package audio.litz
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -14,6 +17,7 @@ import audio.litz.native.InputSensitivity
 import audio.litz.native.Suppression
 import audio.litz.native.VoiceSettings
 import kotlin.math.log10
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
@@ -90,6 +94,7 @@ internal fun rebaseVoiceDraft(
     ) to pending
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun VoiceControls(
     computer: String?,
@@ -98,7 +103,7 @@ internal fun VoiceControls(
     enabled: Boolean,
     supported: List<Suppression> = Suppression.entries,
     failure: UiText? = null,
-    inputRms: Float? = null,
+    inputLevel: (() -> Float?)? = null,
     apply: (ULong, VoiceSettings) -> Unit,
 ) {
     val actual = saved
@@ -188,6 +193,8 @@ internal fun VoiceControls(
             )
             if (draft.sensitivity == "manual")
                 Column(Modifier.padding(horizontal = 20.dp)) {
+                    val level = inputLevel?.let { rememberLevel(it) }
+                    val colors = quietSliderColors()
                     Slider(
                         value = draft.threshold.toFloat(),
                         onValueChange = { value ->
@@ -199,42 +206,26 @@ internal fun VoiceControls(
                             sliderPending = false
                             send(draft)
                         },
-                        valueRange = -60f..-20f,
+                        valueRange = THRESHOLD_LOW..THRESHOLD_HIGH,
                         steps = 39,
                         enabled = enabled,
-                        colors = quietSliderColors(),
+                        colors = colors,
+                        track = { state ->
+                            if (level == null)
+                                SliderDefaults.Track(state, colors = colors, enabled = enabled)
+                            else LevelTrack(level, state.value, enabled)
+                        },
                         modifier = Modifier.semantics { contentDescription = thresholdLabel },
                     )
                     Text(
-                        stringResource(R.string.voice_threshold_hint),
+                        stringResource(
+                            if (level == null) R.string.voice_threshold_hint
+                            else R.string.voice_threshold_level_hint
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            inputRms?.let { rms ->
-                val db = (20.0 * log10(rms.toDouble().coerceAtLeast(0.000001))).coerceIn(-60.0, 0.0)
-                Column(
-                    Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row {
-                        Text(
-                            stringResource(R.string.input_level),
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.decibels_full_scale, db.roundToInt()),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    LinearProgressIndicator(
-                        progress = { ((db + 60.0) / 60.0).toFloat() },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
             HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
             Text(
                 stringResource(R.string.equalizer),
@@ -337,4 +328,49 @@ internal fun VoiceControls(
                     }
                 }
         }
+}
+
+private const val THRESHOLD_LOW = -60f
+private const val THRESHOLD_HIGH = -20f
+
+/** The input level in dB, rising at once and falling 20 dB a second, updated every frame. */
+@Composable
+private fun rememberLevel(read: () -> Float?): State<Float> {
+    val shown = remember { mutableFloatStateOf(THRESHOLD_LOW) }
+    LaunchedEffect(read) {
+        var last = 0L
+        while (true) {
+            withFrameNanos { now ->
+                val db = read()?.let { 20f * log10(it.coerceAtLeast(0.000001f)) } ?: THRESHOLD_LOW
+                val seconds = if (last == 0L) 0f else (now - last) / 1e9f
+                last = now
+                shown.floatValue =
+                    max(db, shown.floatValue - 20f * seconds).coerceAtLeast(THRESHOLD_LOW)
+            }
+        }
+    }
+    return shown
+}
+
+/** The level on the threshold's scale, lit while it reaches the threshold. */
+@Composable
+private fun LevelTrack(level: State<Float>, threshold: Float, enabled: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    val idle = colors.surfaceContainerHighest
+    val open = colors.primary
+    val closed = colors.onSurfaceVariant.copy(alpha = 0.38f)
+    Canvas(
+        Modifier.fillMaxWidth()
+            .height(16.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .alpha(if (enabled) 1f else 0.38f)
+    ) {
+        drawRect(idle)
+        val db = level.value
+        val fraction = ((db - THRESHOLD_LOW) / (THRESHOLD_HIGH - THRESHOLD_LOW)).coerceIn(0f, 1f)
+        drawRect(
+            if (db >= threshold) open else closed,
+            size = size.copy(width = size.width * fraction),
+        )
+    }
 }

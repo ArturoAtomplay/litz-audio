@@ -29,7 +29,6 @@ internal fun status(
         owned = true,
         desktopRoutes = null,
         error = null,
-        microphoneRms = null,
         audio = null,
         callbackFrames = null,
         rttMs = null,

@@ -523,6 +523,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         service?.refreshReadings()
     }
 
+    internal fun microphoneLevel(): Float? = service?.microphoneLevel()
+
     internal fun startAuthorized(settings: Settings) {
         if (!mutable.value.paired) {
             message(UiText(R.string.message_pair_first))

@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
                     refreshRoutes = vm::refreshRoutes,
                     voice = vm::voice,
                     refreshReadings = vm::refreshReadings,
+                    microphoneLevel = vm::microphoneLevel,
                 )
             }
         }

@@ -9,7 +9,7 @@ use litz_core::protocol::{
 };
 use litz_core::transport::{self, Control, MediaSender, Result};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -194,7 +194,6 @@ pub struct Status {
     pub owned: bool,
     pub desktop_routes: Option<DesktopRoutes>,
     pub error: Option<Failure>,
-    pub microphone_rms: Option<f32>,
     pub audio: Option<AudioInfo>,
     pub callback_frames: Option<u64>,
     pub rtt_ms: Option<f64>,
@@ -206,7 +205,6 @@ impl Status {
     /// Without the readings that change on every packet.
     fn settled(&self) -> Self {
         Self {
-            microphone_rms: None,
             callback_frames: None,
             rtt_ms: None,
             listening_stats: None,
@@ -222,11 +220,13 @@ pub struct StatusUpdate {
     pub status: Status,
 }
 
-/// The engine's latest status, versioned each time its settled part changes.
+/// The engine's latest status, versioned each time its settled part changes,
+/// and the microphone level, which the engine stores with every captured frame.
 #[derive(Default)]
 struct Published {
     latest: Mutex<Latest>,
     changed: Condvar,
+    level: Arc<AtomicU32>,
 }
 #[derive(Default)]
 struct Latest {
@@ -300,6 +300,11 @@ impl Engine {
             }
             latest = self.published.changed.wait(latest).unwrap();
         }
+    }
+
+    /// The microphone's RMS level over its last frame, or zero while it is off.
+    pub fn microphone_level(&self) -> f32 {
+        f32::from_bits(self.published.level.load(Ordering::Relaxed))
     }
 
     /// Ends the engine's work and releases anyone waiting in `changes`.
@@ -428,7 +433,7 @@ struct Media {
     settings: Settings,
     reduced: Instant,
     captured: [f32; FRAME],
-    microphone_rms: f32,
+    rms: Arc<AtomicU32>,
     last_capture_at: Instant,
     captured_len: usize,
     capture_block: Option<crate::audio::Captured>,
@@ -444,7 +449,7 @@ impl Media {
         self.listening = None;
         self.encoder = None;
         self.captured_len = 0;
-        self.microphone_rms = 0.0;
+        self.rms.store(0, Ordering::Relaxed);
         self.last_capture_at = Instant::now();
         self.capture_block = None;
         self.capture_offset = 0;
@@ -536,8 +541,8 @@ impl Media {
                     return Err(Failure::AudioDiscontinuity.into());
                 }
                 self.microphone_level.process::<1>(&mut self.captured, 1.0);
-                self.microphone_rms =
-                    (self.captured.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
+                let rms = (self.captured.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
+                self.rms.store(rms.to_bits(), Ordering::Relaxed);
                 self.last_capture_at = Instant::now();
                 let len = e.encode(
                     &self.captured,
@@ -997,7 +1002,7 @@ impl Connected {
     }
 }
 
-async fn connect(identity: &Identity) -> Result<Box<Connected>> {
+async fn connect(identity: &Identity, rms: &Arc<AtomicU32>) -> Result<Box<Connected>> {
     let bind = if identity.endpoint.is_ipv4() {
         "0.0.0.0:0"
     } else {
@@ -1052,7 +1057,7 @@ async fn connect(identity: &Identity) -> Result<Box<Connected>> {
             settings: Settings::default(),
             reduced: now,
             captured: [0.0; FRAME],
-            microphone_rms: 0.0,
+            rms: rms.clone(),
             last_capture_at: now,
             captured_len: 0,
             capture_block: None,
@@ -1150,6 +1155,7 @@ enum Event {
 
 struct Supervisor {
     identity: Identity,
+    rms: Arc<AtomicU32>,
     desired: Settings,
     connected: Option<Box<Connected>>,
     handoff: Option<(std::net::SocketAddr, Handoff)>,
@@ -1163,9 +1169,10 @@ struct Supervisor {
 }
 
 impl Supervisor {
-    fn new(identity: Identity) -> Self {
+    fn new(identity: Identity, rms: Arc<AtomicU32>) -> Self {
         Self {
             identity,
+            rms,
             desired: Settings::default(),
             connected: None,
             handoff: None,
@@ -1245,7 +1252,6 @@ impl Supervisor {
             owned: c.is_some_and(|c| c.owned),
             desktop_routes: c.and_then(|c| c.desktop.clone()),
             error: self.error.clone(),
-            microphone_rms: c.map(|c| c.media.microphone_rms),
             audio: audio.map(Audio::info),
             callback_frames: audio.map(Audio::callback_frames),
             rtt_ms: c.map(|c| c.media.connection.rtt().as_secs_f64() * 1000.0),
@@ -1322,7 +1328,7 @@ impl Supervisor {
                 self.error = None;
                 self.recovery = Recovery::Automatic;
                 if self.connected.is_none() {
-                    match connect(&self.identity).await {
+                    match connect(&self.identity, &self.rms).await {
                         Ok(c) => self.connected(c),
                         Err(e) => {
                             self.recovery = Recovery::after(e.as_ref(), false);
@@ -1397,8 +1403,11 @@ impl Supervisor {
             .as_ref()
             .is_some_and(|c| c.media.connection.remote_address() != endpoint);
         if elsewhere {
-            let candidate = self.identity.clone();
-            self.handoff = Some((endpoint, Box::pin(async move { connect(&candidate).await })));
+            let (candidate, rms) = (self.identity.clone(), self.rms.clone());
+            self.handoff = Some((
+                endpoint,
+                Box::pin(async move { connect(&candidate, &rms).await }),
+            ));
         } else if self.active() && self.connected.is_none() {
             self.attempt = 0;
             self.retry = Some(tokio::time::Instant::now());
@@ -1474,7 +1483,7 @@ impl Supervisor {
             self.connected = None;
         }
         if self.connected.is_none() {
-            self.connected = Some(connect(&self.identity).await?);
+            self.connected = Some(connect(&self.identity, &self.rms).await?);
         }
         if let Some(c) = self.connected.as_mut() {
             c.apply(&self.desired).await?;
@@ -1545,7 +1554,7 @@ impl Supervisor {
             self.recovery = Recovery::PairAgain;
         }
         if close_code == Some(close::MOVED)
-            && let Ok(observer) = connect(&self.identity).await
+            && let Ok(observer) = connect(&self.identity, &self.rms).await
         {
             self.connected = Some(observer);
             self.error = None;
@@ -1603,7 +1612,7 @@ impl Supervisor {
 
     async fn reconnect(&mut self, cancel: &tokio::sync::Notify) {
         let attempt = async {
-            let mut c = connect(&self.identity).await?;
+            let mut c = connect(&self.identity, &self.rms).await?;
             c.apply(&self.desired).await?;
             Ok::<_, transport::Error>(c)
         };
@@ -1642,7 +1651,7 @@ async fn run(
     cancelled: Arc<AtomicBool>,
     published: &Published,
 ) {
-    let mut supervisor = Supervisor::new(identity);
+    let mut supervisor = Supervisor::new(identity, published.level.clone());
     let mut observe = tokio::time::interval(Duration::from_secs(1));
     observe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     published.offer(supervisor.status());
@@ -1761,8 +1770,8 @@ mod tests {
     #[tokio::test]
     async fn an_idle_connection_keeps_its_route_until_the_new_one_answers() -> Result<()> {
         let (identity, [wifi, usb]) = computer()?;
-        let mut supervisor = Supervisor::new(identity);
-        let first = connect(&supervisor.identity).await?;
+        let mut supervisor = Supervisor::new(identity, Arc::default());
+        let first = connect(&supervisor.identity, &supervisor.rms).await?;
         supervisor.connected(first);
         supervisor.address(usb);
         assert_eq!(remote(&supervisor), Some(wifi));
@@ -1782,7 +1791,7 @@ mod tests {
     #[tokio::test]
     async fn a_capture_lost_during_a_request_is_not_a_protocol_error() -> Result<()> {
         let (identity, _) = computer()?;
-        let mut connected = connect(&identity).await?;
+        let mut connected = connect(&identity, &Arc::default()).await?;
         let reply = connected
             .rpc(Message::Stop {
                 stream: Stream::Playback,
@@ -1796,7 +1805,7 @@ mod tests {
     #[tokio::test]
     async fn an_interrupted_event_leaves_no_reply_unread() -> Result<()> {
         let (identity, _) = computer()?;
-        let mut connected = connect(&identity).await?;
+        let mut connected = connect(&identity, &Arc::default()).await?;
         connected
             .rpc(Message::Stop {
                 stream: Stream::Playback,

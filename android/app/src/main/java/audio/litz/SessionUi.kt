@@ -28,7 +28,6 @@ internal class Snapshot(session: SessionStatus) {
     val inUse = connected && owner != null && !owned
     val routes: DesktopRoutes? = status?.desktopRoutes
     val audio: AudioInfo? = status?.audio
-    val microphoneRms: Float? = status?.microphoneRms?.takeIf { running(0) && it.isFinite() }
 
     private fun direction(index: Int) = if (index == 0) status?.microphone else status?.listening
 

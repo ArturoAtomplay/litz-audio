@@ -414,6 +414,9 @@ class SessionService : Service() {
             else -> failure::class.simpleName.orEmpty()
         }
 
+    /** The live microphone level; an engine closed in between has none. */
+    internal fun microphoneLevel(): Float? = runCatching { engine?.microphoneLevel() }.getOrNull()
+
     /** Fresh readings for screens that show them; state changes arrive by themselves. */
     internal fun refreshReadings() {
         scope.launch {
