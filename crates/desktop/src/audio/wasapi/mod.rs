@@ -3,22 +3,79 @@ use crate::server::{CaptureCommand, CaptureOperation, CaptureRoute, Demand, Port
 use litz_core::wake::Wake;
 use litz_core::{pcm, protocol::Route};
 use std::{
+    ffi::c_void,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicPtr, Ordering},
         mpsc,
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 use wasapi::{
     AudioClient, AudioRenderClient, DeviceEnumerator, DeviceEventCallbacks, Direction, Handle,
     Role, SampleType, StreamMode, WaveFormat,
 };
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, INFINITE, SetEvent, WaitForMultipleObjects,
+};
 
 static STOP: AtomicBool = AtomicBool::new(false);
+static STOP_SIGNAL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 unsafe extern "system" fn shutdown(_: u32) -> i32 {
     STOP.store(true, Ordering::Release);
+    let signal = STOP_SIGNAL.load(Ordering::Acquire);
+    if !signal.is_null() {
+        // SAFETY: run() clears STOP_SIGNAL before it closes the event.
+        unsafe { SetEvent(signal) };
+    }
     1
+}
+
+/// An auto-reset event the audio loop sleeps on besides the device events.
+struct Signal(HANDLE);
+// SAFETY: an event may be set and waited on from any thread.
+unsafe impl Send for Signal {}
+// SAFETY: as above; setting an event needs no exclusive access.
+unsafe impl Sync for Signal {}
+impl Signal {
+    fn new() -> Result<Self> {
+        // SAFETY: default security, auto-reset, initially unset and unnamed.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(Self(handle))
+    }
+    fn set(&self) {
+        // SAFETY: the event stays open until this Signal is dropped.
+        unsafe { SetEvent(self.0) };
+    }
+}
+impl Drop for Signal {
+    fn drop(&mut self) {
+        // SAFETY: this Signal owns the handle and nothing uses it afterwards.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// How the device thread hands work to the audio loop. Dropping it wakes the
+/// loop too, so the loop notices the device thread has stopped.
+struct Handoff {
+    ready: mpsc::SyncSender<Ready>,
+    signal: Arc<Signal>,
+}
+impl Handoff {
+    fn send(&self, ready: Ready) -> std::result::Result<(), mpsc::SendError<Ready>> {
+        self.ready.send(ready)?;
+        self.signal.set();
+        Ok(())
+    }
+}
+impl Drop for Handoff {
+    fn drop(&mut self) {
+        self.signal.set();
+    }
 }
 struct Com;
 impl Drop for Com {
@@ -133,7 +190,7 @@ enum Ready {
 fn serve_devices(
     work: mpsc::Receiver<DeviceWork>,
     notify: mpsc::Sender<DeviceWork>,
-    ready: mpsc::SyncSender<Ready>,
+    ready: Handoff,
     mic_available: Arc<AtomicBool>,
     outputs: tokio::sync::watch::Sender<()>,
     mut route: Route,
@@ -280,7 +337,12 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         commands,
         command_slots: Arc::new(tokio::sync::Semaphore::new(1)),
     })?;
+    let signal = Arc::new(Signal::new()?);
     let (prepared, ready) = mpsc::sync_channel(4);
+    let prepared = Handoff {
+        ready: prepared,
+        signal: signal.clone(),
+    };
     let devices = {
         let mic_available = mic_available.clone();
         let capture = capture.as_ref().map(|c| c.id.clone());
@@ -300,9 +362,10 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     };
     let mut mono = [0u8; pcm::CAPACITY * 4];
     let mut stereo = [0u8; pcm::CAPACITY * 8];
+    STOP_SIGNAL.store(signal.0, Ordering::Release);
     while !STOP.load(Ordering::Acquire) && !devices.is_finished() {
-        if let Ok(ready) = ready.try_recv() {
-            match ready {
+        while let Ok(next) = ready.try_recv() {
+            match next {
                 Ready::Active(active, reply, _permit) => {
                     let ok = match &mut capture {
                         Some(c) => c.set_active(active).is_ok(),
@@ -401,16 +464,21 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
             }
         }
         wake.signal();
-        let event = render
-            .as_ref()
-            .map(|r| &r.event)
-            .or_else(|| capture.as_ref().filter(|c| c.active).map(|c| &c.event));
-        if let Some(event) = event {
-            let _ = event.wait_for_event(10);
-        } else {
-            std::thread::sleep(Duration::from_millis(10));
+        let mut events = [signal.0; 3];
+        let mut count = 1;
+        if let Some(r) = &render {
+            events[count] = r.event.as_handle().0;
+            count += 1;
         }
+        if let Some(c) = capture.as_ref().filter(|c| c.active) {
+            events[count] = c.event.as_handle().0;
+            count += 1;
+        }
+        // SAFETY: each handle stays open across the wait: the signal for the
+        // whole loop, the device events while `render` and `capture` own them.
+        unsafe { WaitForMultipleObjects(count as u32, events.as_ptr(), 0, INFINITE) };
     }
+    STOP_SIGNAL.store(std::ptr::null_mut(), Ordering::Release);
     if !STOP.load(Ordering::Acquire) {
         return Err("the device thread stopped".into());
     }
@@ -420,12 +488,22 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn outputs_are_listed_and_routes_opened_without_the_audio_thread() {
         let (commands, work) = CommandSender::channel();
         let notify = commands.notifier();
+        let signal = Arc::new(Signal::new().unwrap());
+        let woken = || {
+            // SAFETY: the test holds the signal open across the check.
+            unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(signal.0, 0) == 0 }
+        };
         let (prepared, ready) = mpsc::sync_channel(4);
+        let prepared = Handoff {
+            ready: prepared,
+            signal: signal.clone(),
+        };
         let devices = std::thread::spawn(move || {
             serve_devices(
                 work,
@@ -456,7 +534,9 @@ mod tests {
             .unwrap();
         let handed = ready.recv_timeout(Duration::from_secs(10)).unwrap();
         assert!(matches!(handed, Ready::Route(None, ..)));
+        assert!(woken(), "handed work must wake the audio loop");
         drop(commands);
         devices.join().unwrap();
+        assert!(woken(), "a stopped device thread must wake the audio loop");
     }
 }
