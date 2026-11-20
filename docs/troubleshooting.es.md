@@ -101,4 +101,4 @@ Abre un [issue](https://github.com/ArturoAtomplay/litz-audio/issues/new/choose) 
 journalctl --user -u litzd -e
 ```
 
-Agrega `-p warning` para ver solo los problemas. Para más detalle, inicia litzd con `LITZ_LOG=debug`.
+Agrega `-p warning` para ver solo los problemas. En Windows el log está en `%LOCALAPPDATA%\litz\litzd.log`. Para más detalle, inicia litzd con `LITZ_LOG=debug`.
