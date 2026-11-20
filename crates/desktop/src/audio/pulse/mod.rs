@@ -420,9 +420,23 @@ fn serve_connected(
     let microphone = Microphone::open(server, consumer, control.clone(), demand_tx, wake.clone())?;
     let changed = Rc::new(Cell::new(false));
     let on_change = changed.clone();
+    let (outputs_changed, outputs) = tokio::sync::watch::channel(());
     server
         .context
-        .set_subscribe_callback(Some(Box::new(move |_, _, _| on_change.set(true))));
+        .set_subscribe_callback(Some(Box::new(move |facility, operation, _| {
+            on_change.set(true);
+            if facility == Some(pulse::context::subscribe::Facility::Sink)
+                && matches!(
+                    operation,
+                    Some(
+                        pulse::context::subscribe::Operation::New
+                            | pulse::context::subscribe::Operation::Removed
+                    )
+                )
+            {
+                outputs_changed.send_replace(());
+            }
+        })));
     server.context.subscribe(
         pulse::context::subscribe::InterestMaskSet::SERVER
             | pulse::context::subscribe::InterestMaskSet::SINK,
@@ -454,8 +468,10 @@ fn serve_connected(
         demand: demand_rx,
         wake: wake.clone(),
         reset: control.reset.clone(),
-        route: Some(route),
+        route: Some(route.clone()),
+        preferred: Some(route),
         resolved: capture.as_ref().map(|c| c.resolved.subscribe()),
+        outputs,
         revision: saved.revision,
         voice: saved.voice,
         commands: super::CommandSender::Pulse(CommandSender {

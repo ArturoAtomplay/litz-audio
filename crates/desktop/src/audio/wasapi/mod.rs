@@ -81,6 +81,8 @@ type Permit = tokio::sync::OwnedSemaphorePermit;
 pub enum DeviceWork {
     Command(CaptureCommand),
     Reopen,
+    /// An endpoint appeared or went away.
+    Changed,
     Closed,
 }
 
@@ -133,6 +135,7 @@ fn serve_devices(
     notify: mpsc::Sender<DeviceWork>,
     ready: mpsc::SyncSender<Ready>,
     mic_available: Arc<AtomicBool>,
+    outputs: tokio::sync::watch::Sender<()>,
     mut route: Route,
     mut capture: Option<String>,
 ) {
@@ -141,11 +144,17 @@ fn serve_devices(
     }
     let _com = Com;
     let mut callbacks = DeviceEventCallbacks::new();
+    let default = notify.clone();
     callbacks.set_default_device_callback(move |direction, role, _| {
         if direction == Direction::Render && role == Role::Console {
-            let _ = notify.send(DeviceWork::Reopen);
+            let _ = default.send(DeviceWork::Reopen);
         }
     });
+    let state = notify.clone();
+    callbacks.set_device_state_callback(move |_, _| drop(state.send(DeviceWork::Changed)));
+    let added = notify.clone();
+    callbacks.set_device_added_callback(move |_| drop(added.send(DeviceWork::Changed)));
+    callbacks.set_device_removed_callback(move |_| drop(notify.send(DeviceWork::Changed)));
     let _registration = DeviceEnumerator::new()
         .and_then(|devices| devices.register_notification_callback(callbacks))
         .ok();
@@ -180,6 +189,10 @@ fn serve_devices(
             }
             Ok(DeviceWork::Reopen) if follow => Some(reopen(&route, &mut capture)),
             Ok(DeviceWork::Reopen) => None,
+            Ok(DeviceWork::Changed) => {
+                outputs.send_replace(());
+                None
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Ok(DeviceWork::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
@@ -246,6 +259,7 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
     let notify = commands.notifier();
     let reopen = commands.notifier();
     let effective = Some(route.clone());
+    let (outputs_changed, outputs) = tokio::sync::watch::channel(());
     let (mut resolved, output) =
         tokio::sync::watch::channel(capture.as_ref().map(|c| c.id.clone()));
     let _network = crate::server::start(Ports {
@@ -256,8 +270,10 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         demand: requests,
         wake: wake.clone(),
         reset: reset.clone(),
-        route: effective,
+        route: effective.clone(),
+        preferred: effective,
         resolved: Some(output),
+        outputs,
         revision: saved.revision,
         voice: saved.voice,
         commands,
@@ -269,7 +285,17 @@ pub fn run(tone: bool, route: Option<Route>) -> Result<()> {
         let capture = capture.as_ref().map(|c| c.id.clone());
         std::thread::Builder::new()
             .name("litz-devices".into())
-            .spawn(move || serve_devices(work, notify, prepared, mic_available, route, capture))?
+            .spawn(move || {
+                serve_devices(
+                    work,
+                    notify,
+                    prepared,
+                    mic_available,
+                    outputs_changed,
+                    route,
+                    capture,
+                )
+            })?
     };
     let mut mono = [0u8; pcm::CAPACITY * 4];
     let mut stereo = [0u8; pcm::CAPACITY * 8];
@@ -402,6 +428,7 @@ mod tests {
                 notify,
                 prepared,
                 Arc::new(AtomicBool::new(true)),
+                tokio::sync::watch::channel(()).0,
                 Route::PhoneOnly,
                 None,
             )

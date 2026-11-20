@@ -121,6 +121,43 @@ pub fn inventory(
     roundtrip(core, mainloop)?;
     Ok(entries.borrow().values().cloned().collect())
 }
+/// Keeps `changed` marked whenever an output appears or goes away.
+pub struct Outputs {
+    _listener: pw::registry::Listener,
+    _registry: pw::registry::RegistryRc,
+}
+pub fn watch_outputs(
+    core: &pw::core::CoreRc,
+) -> Result<(Outputs, tokio::sync::watch::Receiver<()>)> {
+    let registry = core.get_registry_rc()?;
+    let (changed, outputs) = tokio::sync::watch::channel(());
+    let removed = changed.clone();
+    let known = Rc::new(RefCell::new(std::collections::BTreeSet::new()));
+    let gone = known.clone();
+    let listener = registry
+        .add_listener_local()
+        .global(move |global| {
+            if global.type_ == pw::types::ObjectType::Node
+                && global.props.is_some_and(physical)
+                && known.borrow_mut().insert(global.id)
+            {
+                changed.send_replace(());
+            }
+        })
+        .global_remove(move |id| {
+            if gone.borrow_mut().remove(&id) {
+                removed.send_replace(());
+            }
+        })
+        .register();
+    Ok((
+        Outputs {
+            _listener: listener,
+            _registry: registry,
+        },
+        outputs,
+    ))
+}
 pub fn open(
     core: &pw::core::CoreRc,
     mainloop: &pw::main_loop::MainLoopRc,

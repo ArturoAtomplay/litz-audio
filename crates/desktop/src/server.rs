@@ -58,8 +58,13 @@ pub struct Ports {
     pub demand: rtrb::Consumer<Demand>,
     pub wake: Wake,
     pub reset: Arc<AtomicBool>,
+    /// What is captured. While the chosen output is gone, the default one.
     pub route: Option<Route>,
+    /// What the person chose, which `route` returns to once it is back.
+    pub preferred: Option<Route>,
     pub resolved: Option<Resolved>,
+    /// Marked changed whenever an output appears or goes away.
+    pub outputs: tokio::sync::watch::Receiver<()>,
     pub revision: u64,
     pub voice: VoiceSettings,
     pub commands: crate::audio::CommandSender,
@@ -504,7 +509,9 @@ mod tests {
             wake: Wake::try_new()?,
             reset: Arc::default(),
             route: None,
+            preferred: None,
             resolved: None,
+            outputs: Box::leak(Box::new(tokio::sync::watch::channel(()).0)).subscribe(),
             revision: 0,
             voice: VoiceSettings::default(),
             commands,

@@ -86,12 +86,15 @@ enum RouteWork {
         start: Option<(u32, Config)>,
         task: Pending<Option<(Route, CaptureRoute)>>,
     },
+    /// Looks for the chosen output while listening falls back to the default.
+    Recheck { task: Pending<Vec<Endpoint>> },
 }
 
 enum RouteDone {
     Inventory(Result<Vec<Endpoint>>),
     Apply(Result<Applied>),
     Reopen(Result<Option<(Route, CaptureRoute)>>),
+    Recheck(Result<Vec<Endpoint>>),
 }
 
 async fn route_done(work: &mut RouteWork) -> RouteDone {
@@ -99,13 +102,14 @@ async fn route_done(work: &mut RouteWork) -> RouteDone {
         RouteWork::Inventory { task, .. } => RouteDone::Inventory(task.await),
         RouteWork::Apply { task, .. } => RouteDone::Apply(task.await),
         RouteWork::Reopen { task, .. } => RouteDone::Reopen(task.await),
+        RouteWork::Recheck { task } => RouteDone::Recheck(task.await),
     }
 }
 
 /// The chosen output while it exists, otherwise the default one.
 fn reopen(ports: &Ports) -> Pending<Option<(Route, CaptureRoute)>> {
     let default = Route::Mirror { name: None };
-    let chosen = ports.route.clone().unwrap_or(default.clone());
+    let chosen = ports.preferred.clone().unwrap_or(default.clone());
     let first = open_capture(ports, chosen.clone());
     let fallback = (chosen != default).then(|| open_capture(ports, default.clone()));
     Box::pin(async move {
@@ -215,6 +219,13 @@ impl<'a> Streaming<'a> {
                 prepared = async { (&mut self.mic_start.as_mut().unwrap().worker).await },
                     if self.mic_start.is_some() => self.mic_ready(prepared).await?,
                 _ = voice_watch.tick() => self.watch_voice().await?,
+                changed = async { self.ports.outputs.changed().await },
+                    if self.awaiting_preferred() => {
+                    changed.map_err(|_| "audio loop closed")?;
+                    self.route_work = Some(RouteWork::Recheck {
+                        task: inventory(self.ports),
+                    });
+                }
                 step = async { next_step(self.voice_change.as_mut().unwrap()).await },
                     if self.voice_change.is_some() => self.voice_step(step).await?,
                 done = async { route_done(self.route_work.as_mut().unwrap()).await },
@@ -339,7 +350,7 @@ impl<'a> Streaming<'a> {
                         .revision
                         .checked_add(1)
                         .ok_or("settings revision exhausted")?,
-                    route: self.ports.route.clone(),
+                    route: self.ports.preferred.clone(),
                     voice: settings,
                 };
                 let task = tokio::task::spawn_blocking(move || {
@@ -426,6 +437,7 @@ impl<'a> Streaming<'a> {
                 if let Err(error) = persisted {
                     eprintln!("litzd: route applied but settings persistence failed: {error}");
                 }
+                self.ports.preferred = Some(route.clone());
                 install_capture(self.ports, route, next);
                 self.ports.revision = self
                     .ports
@@ -466,6 +478,21 @@ impl<'a> Streaming<'a> {
                     None if capture_active(self.ports, true).await.is_ok() => Ok(()),
                     None => self.stop_listening().await,
                 }
+            }
+            (Some(RouteWork::Recheck { .. }), RouteDone::Recheck(endpoints)) => {
+                let back = match (&self.ports.preferred, endpoints) {
+                    (Some(Route::Mirror { name: Some(name) }), Ok(endpoints)) => {
+                        endpoints.iter().any(|endpoint| &endpoint.name == name)
+                    }
+                    _ => false,
+                };
+                if back {
+                    self.route_work = Some(RouteWork::Reopen {
+                        start: None,
+                        task: reopen(self.ports),
+                    });
+                }
+                Ok(())
             }
             _ => Err("route work out of order".into()),
         }
@@ -544,7 +571,10 @@ impl<'a> Streaming<'a> {
             });
             return Ok(None);
         }
-        if self.ports.capture.is_none() || self.ports.capture_fault.load(Ordering::Acquire) {
+        if self.ports.capture.is_none()
+            || self.ports.capture_fault.load(Ordering::Acquire)
+            || self.ports.route != self.ports.preferred
+        {
             self.route_work = Some(RouteWork::Reopen {
                 start: Some((request_id, config)),
                 task: reopen(self.ports),
@@ -784,6 +814,14 @@ impl<'a> Streaming<'a> {
         Ok(())
     }
 
+    /// Listening on the default output because the chosen one is gone.
+    fn awaiting_preferred(&self) -> bool {
+        self.encoder.is_some()
+            && self.route_work.is_none()
+            && self.ports.route != self.ports.preferred
+            && matches!(self.ports.preferred, Some(Route::Mirror { name: Some(_) }))
+    }
+
     /// Listening that lost its capture reopens it once other route work settles.
     fn recover_capture(&mut self) {
         if self.encoder.is_some() && self.ports.capture.is_none() && self.route_work.is_none() {
@@ -890,7 +928,9 @@ mod tests {
             wake: litz_core::wake::Wake::try_new()?,
             reset: Arc::default(),
             route: None,
+            preferred: None,
             resolved: None,
+            outputs: Box::leak(Box::new(tokio::sync::watch::channel(()).0)).subscribe(),
             revision: 0,
             voice: VoiceSettings::default(),
             commands,
@@ -1044,6 +1084,7 @@ mod tests {
         ports.route = Some(Route::Mirror {
             name: Some("headphones".into()),
         });
+        ports.preferred = ports.route.clone();
         let (_client, mut control) = phone(ports).await?;
         let playback = Config {
             stream: Stream::Playback,
@@ -1075,6 +1116,7 @@ mod tests {
         ports.route = Some(Route::Mirror {
             name: Some("headphones".into()),
         });
+        ports.preferred = ports.route.clone();
         let (_client, mut control) = phone(ports).await?;
         let playback = Config {
             stream: Stream::Playback,
@@ -1121,6 +1163,7 @@ mod tests {
         ports.route = Some(Route::Mirror {
             name: Some("headphones".into()),
         });
+        ports.preferred = ports.route.clone();
         let (_client, mut control) = phone(ports).await?;
         let playback = Config {
             stream: Stream::Playback,
@@ -1149,6 +1192,117 @@ mod tests {
         Ok(())
     }
 
+    /// An audio thread where the chosen "headphones" can come and go.
+    fn headphones(present: Arc<AtomicBool>) -> crate::audio::CommandSender {
+        audio_thread(move |operation| match operation {
+            CaptureOperation::Active(_, reply) => drop(reply.send(true)),
+            CaptureOperation::Inventory(reply) => {
+                let endpoints = present.load(Ordering::Acquire).then(|| Endpoint {
+                    name: "headphones".into(),
+                    label: "Headphones".into(),
+                });
+                drop(reply.send(endpoints.into_iter().collect()));
+            }
+            CaptureOperation::Route(route, reply) => {
+                let opens = match &route {
+                    Route::Mirror { name: None } => true,
+                    Route::Mirror { name: Some(_) } => present.load(Ordering::Acquire),
+                    Route::PhoneOnly => false,
+                };
+                drop(reply.send(opens.then(|| CaptureRoute {
+                    samples: rtrb::RingBuffer::new(1).1,
+                    fault: Arc::default(),
+                    resolved: tokio::sync::watch::channel(Some("speakers".into())).1,
+                })));
+            }
+        })
+    }
+
+    async fn effective(control: &mut Control) -> Result<Option<Route>> {
+        let Message::Capabilities {
+            desktop: Some(desktop),
+        } = tokio::time::timeout(Duration::from_secs(5), control.read())
+            .await??
+            .message
+        else {
+            return Err("expected the outputs".into());
+        };
+        Ok(desktop.effective)
+    }
+
+    #[tokio::test]
+    async fn listening_returns_to_the_chosen_output_once_it_is_back() -> Result<()> {
+        let present = Arc::new(AtomicBool::new(true));
+        let mut ports = ports(headphones(present.clone()))?;
+        let (outputs, changed) = tokio::sync::watch::channel(());
+        ports.outputs = changed;
+        let fault = ports.capture_fault.clone();
+        let wake = ports.wake.clone();
+        let chosen = Route::Mirror {
+            name: Some("headphones".into()),
+        };
+        ports.capture = Some(rtrb::RingBuffer::new(1).1);
+        ports.route = Some(chosen.clone());
+        ports.preferred = ports.route.clone();
+        let (_client, mut control) = phone(ports).await?;
+        let playback = Config {
+            stream: Stream::Playback,
+            epoch: 1,
+        };
+        control
+            .write(&Record::new(1, Message::Start(playback)))
+            .await?;
+        assert!(listening(&reply(&mut control, 1).await?));
+        present.store(false, Ordering::Release);
+        fault.store(true, Ordering::Release);
+        wake.signal();
+        assert_eq!(
+            effective(&mut control).await?,
+            Some(Route::Mirror { name: None })
+        );
+        present.store(true, Ordering::Release);
+        outputs.send_replace(());
+        assert_eq!(effective(&mut control).await?, Some(chosen));
+        control.write(&Record::new(2, Message::GetState {})).await?;
+        assert!(listening(&reply(&mut control, 2).await?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn listening_starts_on_the_chosen_output_once_it_is_back() -> Result<()> {
+        let mut ports = ports(headphones(Arc::new(AtomicBool::new(true))))?;
+        ports.capture = Some(rtrb::RingBuffer::new(1).1);
+        ports.route = Some(Route::Mirror { name: None });
+        ports.preferred = Some(Route::Mirror {
+            name: Some("headphones".into()),
+        });
+        let (_client, mut control) = phone(ports).await?;
+        let playback = Config {
+            stream: Stream::Playback,
+            epoch: 1,
+        };
+        control
+            .write(&Record::new(1, Message::Start(playback)))
+            .await?;
+        assert!(listening(&reply(&mut control, 1).await?));
+        control
+            .write(&Record::new(2, Message::Capabilities { desktop: None }))
+            .await?;
+        let Message::Capabilities {
+            desktop: Some(desktop),
+        } = reply(&mut control, 2).await?
+        else {
+            return Err("expected the outputs".into());
+        };
+        assert_eq!(
+            desktop.effective,
+            Some(Route::Mirror {
+                name: Some("headphones".into())
+            })
+        );
+        Ok(())
+    }
+
     async fn pushed(control: &mut Control) -> Result<Message> {
         let record = tokio::time::timeout(Duration::from_millis(500), control.read())
             .await
@@ -1163,6 +1317,7 @@ mod tests {
         let (output, resolved) = tokio::sync::watch::channel(Some("first".into()));
         ports.capture = Some(rtrb::RingBuffer::new(1).1);
         ports.route = Some(Route::Mirror { name: None });
+        ports.preferred = ports.route.clone();
         ports.resolved = Some(resolved);
         let (_client, mut control) = phone(ports).await?;
         control.write(&Record::new(1, Message::GetState {})).await?;
@@ -1189,6 +1344,7 @@ mod tests {
         };
         ports.capture = Some(samples);
         ports.route = Some(chosen.clone());
+        ports.preferred = ports.route.clone();
         let (_client, mut control) = phone(ports).await?;
         let playback = Config {
             stream: Stream::Playback,

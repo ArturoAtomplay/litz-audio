@@ -132,6 +132,7 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
             }
         }
     });
+    let (_outputs, outputs) = super::capture::watch_outputs(&core)?;
     let (mut demand_tx, demand_rx) = rtrb::RingBuffer::new(8);
     let ports = crate::server::Ports {
         mic: producer,
@@ -141,8 +142,10 @@ fn serve(mainloop: &pw::main_loop::MainLoopRc, tone: bool, route: Option<&Route>
         demand: demand_rx,
         wake: wake.clone(),
         reset: control.reset.clone(),
-        route: effective,
+        route: effective.clone(),
+        preferred: effective,
         resolved,
+        outputs,
         revision: saved.revision,
         voice: saved.voice,
         commands: crate::audio::CommandSender::PipeWire(commands),
