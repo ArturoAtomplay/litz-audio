@@ -152,7 +152,6 @@ async fn listen(
         &device_id,
         endpoint.local_addr()?.port(),
     )?;
-    let mut discovery_health = tokio::time::interval(Duration::from_secs(5));
     let ports = Arc::new(tokio::sync::Mutex::new(ports));
     let mut workers = tokio::task::JoinSet::new();
     let mut window = Instant::now();
@@ -160,9 +159,7 @@ async fn listen(
     loop {
         tokio::select! {
             _ = &mut stop => break,
-            _ = discovery_health.tick() => {
-                if hub.failed() { break; }
-            },
+            _ = hub.storage_failed() => break,
             Some(_) = workers.join_next(), if !workers.is_empty() => {},
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break; };

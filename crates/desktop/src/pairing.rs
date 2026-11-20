@@ -3,7 +3,6 @@ use litz_core::protocol::{Message, close};
 use litz_core::session::Trust;
 use litz_core::transport;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -43,7 +42,7 @@ pub struct Hub {
     attempts: Mutex<(Instant, u32)>,
     persistence: Arc<tokio::sync::Semaphore>,
     approval: Arc<tokio::sync::Semaphore>,
-    failed: AtomicBool,
+    failed: tokio::sync::watch::Sender<bool>,
     connections: Mutex<Vec<(Vec<u8>, quinn::Connection)>>,
 }
 impl Hub {
@@ -55,7 +54,7 @@ impl Hub {
             attempts: Mutex::new((Instant::now(), 0)),
             persistence: Arc::new(tokio::sync::Semaphore::new(1)),
             approval: Arc::new(tokio::sync::Semaphore::new(1)),
-            failed: AtomicBool::new(false),
+            failed: tokio::sync::watch::Sender::new(false),
             connections: Mutex::new(Vec::new()),
         })
     }
@@ -77,7 +76,11 @@ impl Hub {
             .map_err(|_| "another pairing request is being reviewed".into())
     }
     pub fn failed(&self) -> bool {
-        self.failed.load(Ordering::Acquire)
+        *self.failed.borrow()
+    }
+    /// Completes once the registry can no longer be saved and litzd must restart.
+    pub async fn storage_failed(&self) {
+        let _ = self.failed.subscribe().wait_for(|failed| *failed).await;
     }
     pub fn register(&self, connection: &quinn::Connection) -> transport::Result<()> {
         let cert = transport::peer_certificate(connection)?;
@@ -189,7 +192,7 @@ impl Hub {
             next.trust = update(&next.trust)?;
             if let Err(error) = save(&hub.path, &next) {
                 if error.is::<identity::DurabilityUncertain>() {
-                    hub.failed.store(true, Ordering::Release);
+                    hub.failed.send_replace(true);
                     hub.identity.lock().unwrap().trust = Trust::default();
                     for (_, connection) in hub.connections.lock().unwrap().iter() {
                         connection.close(close::STORAGE, b"identity storage requires restart");
@@ -463,6 +466,10 @@ mod tests {
         writer.await??;
         queued.await??;
         assert!(hub.trusted(&two));
+        let watching = tokio::spawn({
+            let hub = hub.clone();
+            async move { hub.storage_failed().await }
+        });
         assert!(
             hub.persist(
                 {
@@ -481,6 +488,7 @@ mod tests {
             .is_err()
         );
         assert!(hub.failed());
+        tokio::time::timeout(Duration::from_secs(1), watching).await??;
         assert!(!hub.trusted(&one) && !hub.trusted(&two));
         assert!(hub.approve(&two, "Retry", None).await.is_err());
         std::fs::remove_file(path)?;
