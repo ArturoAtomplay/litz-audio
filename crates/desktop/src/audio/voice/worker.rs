@@ -201,22 +201,60 @@ struct Biquad {
     a: [f64; 2],
     z: [f64; 2],
 }
+// W3C Audio EQ Cookbook designs at 48 kHz, Q = S = 1/sqrt(2).
 impl Biquad {
-    fn peak(hz: f64, db: i8) -> Self {
-        // RBJ peaking EQ, Q=0.707, normalized a0 (W3C Audio EQ Cookbook).
-        let a = 10f64.powf(f64::from(db) / 40.0);
-        let omega = std::f64::consts::TAU * hz / 48000.0;
-        let alpha = omega.sin() / std::f64::consts::SQRT_2;
-        let a0 = 1.0 + alpha / a;
+    fn normalized(b: [f64; 3], a: [f64; 3]) -> Self {
         Self {
-            b: [
-                (1.0 + alpha * a) / a0,
-                -2.0 * omega.cos() / a0,
-                (1.0 - alpha * a) / a0,
-            ],
-            a: [-2.0 * omega.cos() / a0, (1.0 - alpha / a) / a0],
+            b: b.map(|b| b / a[0]),
+            a: [a[1] / a[0], a[2] / a[0]],
             z: [0.0; 2],
         }
+    }
+    fn omega(hz: f64) -> (f64, f64) {
+        let omega = std::f64::consts::TAU * hz / 48000.0;
+        (omega.cos(), omega.sin() / std::f64::consts::SQRT_2)
+    }
+    fn peak(hz: f64, db: i8) -> Self {
+        let a = 10f64.powf(f64::from(db) / 40.0);
+        let (cos, alpha) = Self::omega(hz);
+        Self::normalized(
+            [1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a],
+            [1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a],
+        )
+    }
+    fn low_shelf(hz: f64, db: i8) -> Self {
+        let a = 10f64.powf(f64::from(db) / 40.0);
+        let (cos, alpha) = Self::omega(hz);
+        let k = 2.0 * a.sqrt() * alpha;
+        Self::normalized(
+            [
+                a * ((a + 1.0) - (a - 1.0) * cos + k),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
+                a * ((a + 1.0) - (a - 1.0) * cos - k),
+            ],
+            [
+                (a + 1.0) + (a - 1.0) * cos + k,
+                -2.0 * ((a - 1.0) + (a + 1.0) * cos),
+                (a + 1.0) + (a - 1.0) * cos - k,
+            ],
+        )
+    }
+    fn high_shelf(hz: f64, db: i8) -> Self {
+        let a = 10f64.powf(f64::from(db) / 40.0);
+        let (cos, alpha) = Self::omega(hz);
+        let k = 2.0 * a.sqrt() * alpha;
+        Self::normalized(
+            [
+                a * ((a + 1.0) + (a - 1.0) * cos + k),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
+                a * ((a + 1.0) + (a - 1.0) * cos - k),
+            ],
+            [
+                (a + 1.0) - (a - 1.0) * cos + k,
+                2.0 * ((a - 1.0) - (a + 1.0) * cos),
+                (a + 1.0) - (a - 1.0) * cos - k,
+            ],
+        )
     }
     fn process(&mut self, input: f32) -> f32 {
         let x = f64::from(input);
@@ -240,7 +278,11 @@ pub(super) struct Pipeline {
     settling: usize,
 }
 fn equalizer(db: [i8; 3]) -> [Biquad; 3] {
-    std::array::from_fn(|i| Biquad::peak([200.0, 1200.0, 5000.0][i], db[i]))
+    [
+        Biquad::low_shelf(200.0, db[0]),
+        Biquad::peak(1200.0, db[1]),
+        Biquad::high_shelf(5000.0, db[2]),
+    ]
 }
 impl Pipeline {
     fn configure(&mut self, settings: VoiceSettings) {
@@ -1182,6 +1224,32 @@ mod tests {
                 }
             }
             assert!((10.0 * (output / input).log10() - f64::from(db)).abs() < 0.02);
+        }
+    }
+    fn response_db(mut filter: Biquad, hz: f64) -> f64 {
+        let (mut input, mut output) = (0.0f64, 0.0f64);
+        for i in 0..96000 {
+            let x = (std::f64::consts::TAU * hz * f64::from(i) / 48000.0).sin() as f32 * 0.05;
+            let y = filter.process(x);
+            if i > 48000 {
+                input += f64::from(x * x);
+                output += f64::from(y * y);
+            }
+        }
+        10.0 * (output / input).log10()
+    }
+    #[test]
+    fn shelves_reach_their_gain_beyond_the_corner_and_leave_the_rest() {
+        for db in [-12, -6, 6, 12] {
+            let half = f64::from(db) / 2.0;
+            assert!((response_db(Biquad::low_shelf(200.0, db), 20.0) - f64::from(db)).abs() < 0.5);
+            assert!((response_db(Biquad::low_shelf(200.0, db), 200.0) - half).abs() < 0.1);
+            assert!(response_db(Biquad::low_shelf(200.0, db), 5000.0).abs() < 0.1);
+            assert!(
+                (response_db(Biquad::high_shelf(5000.0, db), 20000.0) - f64::from(db)).abs() < 0.5
+            );
+            assert!((response_db(Biquad::high_shelf(5000.0, db), 5000.0) - half).abs() < 0.1);
+            assert!(response_db(Biquad::high_shelf(5000.0, db), 300.0).abs() < 0.1);
         }
     }
     #[test]
