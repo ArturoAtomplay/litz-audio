@@ -197,8 +197,7 @@
     <string name="message_service_starting">Litz is starting; try again.</string>
     <string name="message_pair_first">Pair a computer first.</string>
     <string name="message_directions_stopped">Audio stopped</string>
-    <string name="message_device_disconnected">The selected audio device was disconnected, so that direction stopped.</string>
-    <string name="message_headphones_disconnected">Headphones disconnected. Tap Listen to use your phone speaker.</string>
+    <string name="message_device_disconnected">The selected audio device was disconnected, so the phone uses its default one.</string>
     <string name="message_local_network_needed">Allow local network access to find nearby computers.</string>
     <string name="message_permission_denied">Permission denied. Allow local network access and, for the microphone, microphone access in Android settings, then try again.</string>
     <string name="discovery_failed">Nearby discovery failed (%1$d). Check network permissions and tap Refresh.</string>

@@ -93,20 +93,10 @@ class SessionService : Service() {
                 val ids = removed.map { it.id }.toSet()
                 val next =
                     desired.copy(
-                        mic = desired.mic && desired.input !in ids,
-                        playback = desired.playback && desired.output !in ids,
+                        input = desired.input.takeUnless { it in ids } ?: 0,
+                        output = desired.output.takeUnless { it in ids } ?: 0,
                     )
                 if (next != desired) update(next, UiText(R.string.message_device_disconnected))
-            }
-        }
-    private val noisy =
-        object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                if (desired.playback)
-                    update(
-                        desired.copy(playback = false),
-                        UiText(R.string.message_headphones_disconnected),
-                    )
             }
         }
 
@@ -149,15 +139,6 @@ class SessionService : Service() {
                     )
                 )
         audio.registerAudioDeviceCallback(devices, Handler(mainLooper))
-        if (Build.VERSION.SDK_INT >= 33)
-            registerReceiver(
-                noisy,
-                IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
-                RECEIVER_NOT_EXPORTED,
-            )
-        else
-            @Suppress("DEPRECATION")
-            registerReceiver(noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
         val tethering =
             IntentFilter().apply {
                 addAction(TETHER_STATE_CHANGED)
@@ -691,7 +672,6 @@ class SessionService : Service() {
         active = false
         scope.cancel()
         audio.unregisterAudioDeviceCallback(devices)
-        unregisterReceiver(noisy)
         unregisterReceiver(usbChanged)
         releaseLocks()
         synchronized(lifetime) { engine?.shutdown() }
