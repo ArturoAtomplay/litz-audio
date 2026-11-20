@@ -25,39 +25,40 @@ internal object UsbRoutes {
         val subnet: UsbSubnet,
     )
 
+    /** Throws when the system cannot list its interfaces, which is not the same as no USB. */
     fun interfaces(): List<Interface> =
-        runCatching {
-                NetworkInterface.getNetworkInterfaces()
-                    .toList()
-                    .filter {
-                        it.isUp &&
-                            !it.isLoopback &&
-                            (it.name.startsWith("rndis") ||
-                                it.name.startsWith("usb") ||
-                                it.name.startsWith("ncm"))
-                    }
-                    .flatMap { network ->
-                        network.interfaceAddresses.mapNotNull { interfaceAddress ->
-                            val address =
-                                interfaceAddress.address as? Inet4Address ?: return@mapNotNull null
-                            val prefix = interfaceAddress.networkPrefixLength.toInt()
-                            if (prefix !in 1..32) return@mapNotNull null
-                            Interface(
-                                network,
-                                address,
-                                UsbSubnet(
-                                    address.address.fold(0) { value, byte ->
-                                        (value shl 8) or (byte.toInt() and 255)
-                                    },
-                                    prefix,
-                                ),
-                            )
-                        }
-                    }
+        NetworkInterface.getNetworkInterfaces()
+            ?.toList()
+            .orEmpty()
+            .filter {
+                it.isUp &&
+                    !it.isLoopback &&
+                    (it.name.startsWith("rndis") ||
+                        it.name.startsWith("usb") ||
+                        it.name.startsWith("ncm"))
             }
-            .getOrDefault(emptyList())
+            .flatMap { network ->
+                network.interfaceAddresses.mapNotNull { interfaceAddress ->
+                    val address =
+                        interfaceAddress.address as? Inet4Address ?: return@mapNotNull null
+                    val prefix = interfaceAddress.networkPrefixLength.toInt()
+                    if (prefix !in 1..32) return@mapNotNull null
+                    Interface(
+                        network,
+                        address,
+                        UsbSubnet(
+                            address.address.fold(0) { value, byte ->
+                                (value shl 8) or (byte.toInt() and 255)
+                            },
+                            prefix,
+                        ),
+                    )
+                }
+            }
 
-    fun subnets(): List<UsbSubnet> = interfaces().map { it.subnet }
+    /** For display and ordering, where an unknown route counts as no USB. */
+    fun subnets(): List<UsbSubnet> =
+        runCatching { interfaces() }.getOrDefault(emptyList()).map { it.subnet }
 
     fun prefer(computers: List<NearbyComputer>, subnets: List<UsbSubnet>): List<NearbyComputer> =
         computers.map { computer ->
