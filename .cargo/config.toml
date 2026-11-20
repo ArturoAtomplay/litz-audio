@@ -1,4 +1,8 @@
 # Windows installers should not require a separate VC++ runtime installation.
-# Cargo's native build helpers propagate this choice to the bundled C codec.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Opus picks its C runtime through its own OPUS_STATIC_RUNTIME option, which
+# defaults to the DLL and overrides the /MT the cmake crate passes.
+[env]
+CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = { value = ".cargo/static-crt.cmake", relative = true }
