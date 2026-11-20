@@ -1,6 +1,6 @@
 //! Reproducible offline quality/performance audit. Run in release, serially.
 use super::suppression;
-use super::worker::Pipeline;
+use super::worker::{Biquad, HIGH_PASS_HZ, Pipeline};
 use litz_core::protocol::{FRAME, Suppression, VoiceSettings};
 use std::fs;
 use std::path::Path;
@@ -103,7 +103,13 @@ fn speech_quality_matrix() {
                 };
                 let label = format!("{scenario}-{algorithm:?}-level{level}");
                 wav(&directory.join(format!("{label}.wav")), &output);
-                let snr = score(&clean, &output, delay);
+                let mut high_pass = Biquad::high_pass(HIGH_PASS_HZ);
+                let reference: Vec<f32> = if settings.enabled() {
+                    clean.iter().map(|x| high_pass.process(*x)).collect()
+                } else {
+                    clean.clone()
+                };
+                let snr = score(&reference, &output, delay);
                 let row = serde_json::json!({"case": label, "delay_samples": delay, "input_snr_db": score(&clean, &input, 0), "output_snr_db": snr, "p50_ms": times[times.len()/2], "p99_ms": times[times.len()*99/100], "max_ms": times.last(), "over_10ms": times.iter().filter(|t| **t > 10.0).count()});
                 eprintln!("{row}");
                 report.push(row);

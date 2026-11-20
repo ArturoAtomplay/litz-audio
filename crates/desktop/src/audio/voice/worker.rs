@@ -12,7 +12,7 @@ const HOLD_FRAMES: u8 = (0.200 * 48000.0 / FRAME as f64) as u8;
 const LEVEL_RELEASE_FRAMES: u16 = (0.200 * 48000.0 / FRAME as f64) as u16;
 const AUTOMATIC_THRESHOLD_FACTOR: f32 = 4.0;
 /// Below the voice, where handling, wind and room rumble live.
-const HIGH_PASS_HZ: f64 = 80.0;
+pub(super) const HIGH_PASS_HZ: f64 = 80.0;
 const COMPRESSOR_THRESHOLD_DB: f32 = -10.0;
 const COMPRESSOR_RATIO: f32 = 3.0;
 const COMPRESSOR_KNEE_DB: f32 = 6.0;
@@ -241,7 +241,7 @@ impl Gate {
     }
 }
 
-struct Biquad {
+pub(super) struct Biquad {
     b: [f64; 3],
     a: [f64; 2],
     z: [f64; 2],
@@ -259,7 +259,7 @@ impl Biquad {
         let omega = std::f64::consts::TAU * hz / 48000.0;
         (omega.cos(), omega.sin() / std::f64::consts::SQRT_2)
     }
-    fn high_pass(hz: f64) -> Self {
+    pub(super) fn high_pass(hz: f64) -> Self {
         let (cos, alpha) = Self::omega(hz);
         Self::normalized(
             [(1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0],
@@ -308,7 +308,7 @@ impl Biquad {
             ],
         )
     }
-    fn process(&mut self, input: f32) -> f32 {
+    pub(super) fn process(&mut self, input: f32) -> f32 {
         let x = f64::from(input);
         let y = self.b[0] * x + self.z[0];
         self.z[0] = self.b[1] * x - self.a[0] * y + self.z[1];
