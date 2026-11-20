@@ -1,0 +1,39 @@
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0217", reason = "tract-nnef's NNEF parser never runs: deep_filter loads its ONNX model through tract_onnx::onnx(), and that model is a checksum-pinned project asset. The fixed tract 0.21.16 does not build with deep_filter at the pinned revision." },
+    { id = "RUSTSEC-2026-0319", reason = "anymap2 only runs inside liquid, which tract-linalg's build script uses to generate code." },
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml only runs inside askama_derive while uniffi-bindgen generates the Kotlin bindings." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is a proc-macro that tract expands at compile time." },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils only arrives through js-sys, which is built for wasm targets and never for litzd or the app." },
+]
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BlueOak-1.0.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/Rikorose/DeepFilterNet"]
