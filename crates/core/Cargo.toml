@@ -25,3 +25,6 @@ libc = "=0.2.191"
 [dev-dependencies]
 rcgen.workspace = true
 proptest = "=1.12.0"
+
+[lints]
+workspace = true

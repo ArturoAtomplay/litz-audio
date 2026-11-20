@@ -202,10 +202,11 @@ fn crypt(bytes: &[u8], encrypt: bool) -> io::Result<Vec<u8>> {
         cbData: 0,
         pbData: std::ptr::null_mut(),
     };
-    // SAFETY: DPAPI reads input during the call and allocates output with
-    // LocalAlloc. Flags prohibit any UI. The user-scoped default is intentional.
-    unsafe {
-        let ok = if encrypt {
+    let ok = if encrypt {
+        // SAFETY: DPAPI reads `input` during the call and allocates `output`
+        // with LocalAlloc. The flags forbid any UI; the user-scoped default is
+        // intentional.
+        unsafe {
             CryptProtectData(
                 &input,
                 std::ptr::null(),
@@ -215,7 +216,10 @@ fn crypt(bytes: &[u8], encrypt: bool) -> io::Result<Vec<u8>> {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut output,
             )
-        } else {
+        }
+    } else {
+        // SAFETY: as for CryptProtectData above.
+        unsafe {
             CryptUnprotectData(
                 &input,
                 std::ptr::null_mut(),
@@ -225,12 +229,15 @@ fn crypt(bytes: &[u8], encrypt: bool) -> io::Result<Vec<u8>> {
                 CRYPTPROTECT_UI_FORBIDDEN,
                 &mut output,
             )
-        };
-        if ok == 0 {
-            return Err(io::Error::last_os_error());
         }
-        let result = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        LocalFree(output.pbData.cast());
-        Ok(result)
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
     }
+    // SAFETY: DPAPI succeeded, so `pbData` holds `cbData` initialized bytes.
+    let result =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    // SAFETY: `pbData` came from LocalAlloc in DPAPI and is freed once.
+    unsafe { LocalFree(output.pbData.cast()) };
+    Ok(result)
 }

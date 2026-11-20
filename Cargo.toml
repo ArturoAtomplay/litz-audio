@@ -9,6 +9,10 @@ edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
 
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+
 [workspace.dependencies]
 pipewire = { version = "=0.10.1", features = ["v1_0_0"] }
 rtrb = "=0.4.1"

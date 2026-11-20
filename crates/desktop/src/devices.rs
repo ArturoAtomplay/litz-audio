@@ -292,8 +292,10 @@ impl User {
         use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TokenUser};
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
         let mut handle = std::ptr::null_mut();
-        // SAFETY: the pseudo handle needs no closing; `handle` is a valid out pointer.
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } == 0 {
+        // SAFETY: GetCurrentProcess has no preconditions; its pseudo handle needs no closing.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: `handle` is a valid out pointer.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut handle) } == 0 {
             return Err(io::Error::last_os_error());
         }
         let mut length = 0;
@@ -326,12 +328,11 @@ impl User {
         if unsafe { ConvertSidToStringSidW(user.psid(), &mut text) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: ConvertSidToStringSidW returned a NUL-terminated string,
-        // allocated with LocalAlloc and freed once here.
-        unsafe {
-            user.sid = String::from_utf16_lossy(windows::core::PCWSTR(text).as_wide());
-            LocalFree(text.cast());
-        }
+        let wide = windows::core::PCWSTR(text);
+        // SAFETY: ConvertSidToStringSidW returned a NUL-terminated string.
+        user.sid = String::from_utf16_lossy(unsafe { wide.as_wide() });
+        // SAFETY: the string was allocated with LocalAlloc and is freed once here.
+        unsafe { LocalFree(text.cast()) };
         Ok(user)
     }
 
@@ -356,10 +357,9 @@ impl User {
         use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
         use windows_sys::Win32::Security::{EqualSid, OWNER_SECURITY_INFORMATION};
         let (mut owner, mut descriptor) = (std::ptr::null_mut(), std::ptr::null_mut());
-        // SAFETY: `handle` is open; the out pointers are valid and `descriptor`
-        // owns `owner`, so it is freed after the comparison.
-        unsafe {
-            let status = GetSecurityInfo(
+        // SAFETY: `handle` is open and the out pointers are valid locals.
+        let status = unsafe {
+            GetSecurityInfo(
                 handle,
                 SE_KERNEL_OBJECT,
                 OWNER_SECURITY_INFORMATION,
@@ -368,14 +368,17 @@ impl User {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 &mut descriptor,
-            );
-            if status != 0 {
-                return Err(io::Error::from_raw_os_error(status as i32));
-            }
-            let equal = EqualSid(owner, self.psid()) != 0;
-            LocalFree(descriptor);
-            Ok(equal)
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status as i32));
         }
+        // SAFETY: `owner` points into `descriptor`, which is still allocated.
+        let equal = unsafe { EqualSid(owner, self.psid()) } != 0;
+        // SAFETY: `descriptor` came from GetSecurityInfo and is freed once,
+        // after the last use of `owner`.
+        unsafe { LocalFree(descriptor) };
+        Ok(equal)
     }
 }
 

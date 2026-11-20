@@ -340,20 +340,21 @@ mod toast {
                 exe.with_file_name("litzdw.exe").display()
             ),
         )?;
-        // SAFETY: APP_ID is a static NUL-terminated string. The MTA usage is
-        // never released, so the class object stays reachable for the
-        // process lifetime.
+        // SAFETY: APP_ID is a static NUL-terminated string.
+        unsafe { SetCurrentProcessExplicitAppUserModelID(APP_ID) }?;
+        // SAFETY: the usage is never released, so the class object registered
+        // below stays reachable for the process lifetime.
+        unsafe { CoIncrementMTAUsage() }?;
+        let factory: IClassFactory = Factory.into();
+        // SAFETY: ACTIVATOR is static and COM keeps its own reference to `factory`.
         unsafe {
-            SetCurrentProcessExplicitAppUserModelID(APP_ID)?;
-            CoIncrementMTAUsage()?;
-            let factory: IClassFactory = Factory.into();
             CoRegisterClassObject(
                 &ACTIVATOR,
                 &factory,
                 CLSCTX_LOCAL_SERVER,
                 REGCLS_MULTIPLEUSE,
-            )?;
-        }
+            )
+        }?;
         Ok(())
     }
 

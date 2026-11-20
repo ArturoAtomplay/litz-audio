@@ -114,28 +114,33 @@ impl Capture {
             let (mut frames, mut flags) = (0u32, 0u32);
             // Do not use wasapi 0.26's slice helper here: a SILENT buffer is
             // allowed to have a null data pointer. Copy only non-silent PCM.
-            // SAFETY: GetBuffer owns the returned bytes until ReleaseBuffer below;
-            // capacity and the silent/null cases are checked before copying.
+            // SAFETY: the out pointers are valid locals; the returned buffer
+            // stays ours until ReleaseBuffer below.
             unsafe {
                 self.capture
-                    .GetBuffer(&mut pointer, &mut frames, &mut flags, None, None)?;
-                let valid = frames as usize <= CAPACITY;
-                if valid {
-                    let bytes = &mut self.bytes[..frames as usize * 8];
-                    if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
-                        bytes.fill(0);
-                    } else if !pointer.is_null() {
-                        bytes.copy_from_slice(std::slice::from_raw_parts(pointer, bytes.len()));
-                    } else {
-                        self.capture.ReleaseBuffer(frames)?;
-                        return Err("Missing WASAPI PCM".into());
-                    }
+                    .GetBuffer(&mut pointer, &mut frames, &mut flags, None, None)
+            }?;
+            let copied = if frames as usize > CAPACITY {
+                Err("Oversized WASAPI packet")
+            } else {
+                let bytes = &mut self.bytes[..frames as usize * 8];
+                if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
+                    bytes.fill(0);
+                    Ok(())
+                } else if pointer.is_null() {
+                    Err("Missing WASAPI PCM")
+                } else {
+                    // SAFETY: GetBuffer returned `frames` stereo float frames,
+                    // 8 bytes each, at `pointer`, not yet released.
+                    bytes.copy_from_slice(unsafe {
+                        std::slice::from_raw_parts(pointer, bytes.len())
+                    });
+                    Ok(())
                 }
-                self.capture.ReleaseBuffer(frames)?;
-                if !valid {
-                    return Err("Oversized WASAPI packet".into());
-                }
-            }
+            };
+            // SAFETY: releases exactly the frames GetBuffer handed out.
+            unsafe { self.capture.ReleaseBuffer(frames) }?;
+            copied?;
             let at = Instant::now();
             for bytes in self.bytes[..frames as usize * 8].as_chunks::<8>().0 {
                 let samples = [
