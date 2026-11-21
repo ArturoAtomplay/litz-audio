@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "litz-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "audioadapter-buffers",
  "bytes",
@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "litz-phone"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "litzd"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "deep_filter",
  "futures-lite",
@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "uniffi",
 ]
