@@ -97,6 +97,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { jniLibs { useLegacyPackaging = false } }
+    dependenciesInfo { includeInApk = false }
 }
 
 dependencies {
@@ -126,6 +127,7 @@ abstract class BuildRust : DefaultTask() {
     @get:Internal abstract val repository: DirectoryProperty
     @get:Internal abstract val sdkDirectory: DirectoryProperty
     @get:Internal abstract val ndkDirectory: DirectoryProperty
+    @get:Internal abstract val cargoHome: Property<String>
     @get:LocalState abstract val targetDirectory: DirectoryProperty
     @get:Input abstract val minimumApi: Property<Int>
     @get:Input abstract val abis: MapProperty<String, String>
@@ -148,27 +150,36 @@ abstract class BuildRust : DefaultTask() {
         val sdkCmakeBin = sdkDirectory.get().asFile.resolve("cmake/${cmakeVersion.get()}/bin")
         val ninjaBin = cmakeMakeProgram.orNull?.let { File(it).parentFile }
         val sdkCmake = sdkCmakeBin.resolve("cmake$exe")
-        abis.get().keys.forEach { abi ->
-        val arguments = mutableListOf("cargo", "ndk", "-t", abi,
-            "-P", minimumApi.get().toString(), "build", "--locked", "-p", "litz-phone",
-            "--target-dir", target.absolutePath)
-        if (releaseBuild.get()) arguments += "--release"
-        exec.exec {
-            workingDir(repository.get().asFile)
-            commandLine(arguments)
-            environment("ANDROID_NDK_HOME", ndkDirectory.get().asFile.absolutePath)
-            environment("ANDROID_NDK_ROOT", ndkDirectory.get().asFile.absolutePath)
-            environment(toolEnvironment.get())
-            environment("PKG_CONFIG_ALLOW_CROSS", "0")
-            if (sdkCmake.isFile) {
-                environment("CMAKE", sdkCmake.absolutePath)
-            }
-            val toolBin = ninjaBin ?: sdkCmakeBin
-            if (toolBin.isDirectory) {
-                environment("PATH", "${toolBin.absolutePath}${File.pathSeparator}${toolEnvironment.get().getValue("PATH")}")
-            }
-            environment("CMAKE_GENERATOR", "Ninja")
+        // The release APK is reproducible, so source paths of the checkout and
+        // of crates in the Cargo home must not depend on where they live.
+        val prefixes = listOf(repository.get().asFile.absolutePath to ".", cargoHome.get() to "/cargo")
+        val rustFlags = prefixes.joinToString(", ") { (from, to) ->
+            "\"--remap-path-prefix=$from=$to\"".replace("\\", "\\\\")
         }
+        val cFlags = prefixes.joinToString(" ") { (from, to) -> "-ffile-prefix-map=$from=$to" }
+        abis.get().forEach { (abi, triple) ->
+            val arguments = mutableListOf("cargo", "ndk", "-t", abi,
+                "-P", minimumApi.get().toString(), "build", "--locked", "-p", "litz-phone",
+                "--target-dir", target.absolutePath, "--config", "target.$triple.rustflags = [$rustFlags]")
+            if (releaseBuild.get()) arguments += "--release"
+            exec.exec {
+                workingDir(repository.get().asFile)
+                commandLine(arguments)
+                environment("ANDROID_NDK_HOME", ndkDirectory.get().asFile.absolutePath)
+                environment("ANDROID_NDK_ROOT", ndkDirectory.get().asFile.absolutePath)
+                environment(toolEnvironment.get())
+                environment("PKG_CONFIG_ALLOW_CROSS", "0")
+                environment("CFLAGS_${triple.replace('-', '_')}", cFlags)
+                environment("CXXFLAGS_${triple.replace('-', '_')}", cFlags)
+                if (sdkCmake.isFile) {
+                    environment("CMAKE", sdkCmake.absolutePath)
+                }
+                val toolBin = ninjaBin ?: sdkCmakeBin
+                if (toolBin.isDirectory) {
+                    environment("PATH", "${toolBin.absolutePath}${File.pathSeparator}${toolEnvironment.get().getValue("PATH")}")
+                }
+                environment("CMAKE_GENERATOR", "Ninja")
+            }
         }
 
         val output = outputDirectory.get().asFile
@@ -189,6 +200,8 @@ fun registerRustTask(name: String, release: Boolean) = tasks.register<BuildRust>
     repository.set(rootProject.layout.projectDirectory.dir(".."))
     sdkDirectory.set(androidComponents.sdkComponents.sdkDirectory)
     ndkDirectory.set(androidComponents.sdkComponents.ndkDirectory)
+    cargoHome.set(providers.environmentVariable("CARGO_HOME")
+        .orElse(providers.systemProperty("user.home").map { File(it, ".cargo").path }))
     targetDirectory.set(layout.buildDirectory.dir("rust-target"))
     cmakeVersion.set(cmakeVersionName)
     minimumApi.set(minimumAndroidApi)

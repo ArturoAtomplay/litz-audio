@@ -32,3 +32,7 @@ target_link_options(litz_phone PRIVATE
     "-Wl,--gc-sections"
     "-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
 )
+
+# The release library is reproducible. Its DWARF holds the builder's SDK, NDK
+# and Gradle paths and would change the build ID, though it is never shipped.
+target_link_options(litz_phone PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-Wl,--strip-debug>")
