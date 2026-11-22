@@ -24,17 +24,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libpulse-dev libclang-dev pkg-config cmake
       - run: rustup install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo fmt --all -- --check
+      - if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
       - name: DeepFilterNet model
         shell: bash
         run: packaging/fetch-model.sh target/model
       - run: cargo clippy --locked -p litz-core -p litzd --all-targets --all-features -- -D warnings
       - run: cargo test --locked -p litz-core -p litzd --all-features
-      - name: Phone engine
-        if: runner.os == 'Linux'
-        run: |
-          cargo clippy --locked -p litz-phone --all-targets -- -D warnings
-          cargo test --locked -p litz-phone
       - name: Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -76,10 +72,17 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
+            . -> target
             . -> android/app/build/rust-target
             . -> android/app/build/rust-host-target
             . -> android/app/build/rust-host-library
       - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Phone engine
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          cargo clippy --locked -p litz-phone --all-targets -- -D warnings
+          cargo ndk -t arm64-v8a -P 23 clippy --locked -p litz-phone -- -D warnings
+          cargo test --locked -p litz-phone
       - name: Foss build has no proprietary libraries
         run: |
           if grep -E '^com\.google\.(android\.(gms|ump)|firebase)' android/app/gradle.lockfile | grep -q foss; then
