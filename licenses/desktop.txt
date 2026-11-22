@@ -2276,7 +2276,7 @@ DEALINGS IN THE SOFTWARE.
 
 ================================================================================
 MIT License
-Used by: rubato 0.14.1, rubato 5.0.1
+Used by: rubato 0.14.1, rubato 5.1.0
 --------------------------------------------------------------------------------
 Copyright (c) 2020 Henrik Enquist
 
@@ -2574,7 +2574,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ================================================================================
 MIT License
-Used by: zbus 6.2.1, zbus_macros 6.2.1, zbus_utils 6.1.0
+Used by: zbus 6.3.0, zbus_macros 6.5.0, zbus_utils 6.1.0
 --------------------------------------------------------------------------------
 Copyright (c) 2024 Zeeshan Ali Khan & zbus contributors
 
@@ -3185,7 +3185,7 @@ SOFTWARE.
 
 ================================================================================
 MIT License
-Used by: anymap3 1.1.0, cookie-factory 0.3.3, libm 0.2.11, realfft 3.5.0, windows-collections 0.3.2, windows-core 0.62.2, windows-future 0.3.2, windows-implement 0.60.2, windows-interface 0.59.3, windows-link 0.2.1, windows-numerics 0.3.1, windows-result 0.4.1, windows-strings 0.5.1, windows-sys 0.52.0, windows-sys 0.61.2, windows-targets 0.52.6, windows-threading 0.2.1, windows 0.62.2, windows_x86_64_gnu 0.52.6, windows_x86_64_msvc 0.52.6
+Used by: anymap3 1.1.0, cookie-factory 0.3.3, libm 0.2.11, realfft 3.5.0, windows-collections 0.3.2, windows-core 0.62.2, windows-future 0.3.2, windows-implement 0.60.2, windows-interface 0.59.3, windows-link 0.2.1, windows-numerics 0.3.1, windows-result 0.4.1, windows-strings 0.5.1, windows-sys 0.61.2, windows-threading 0.2.1, windows 0.62.2
 --------------------------------------------------------------------------------
 MIT License
 
