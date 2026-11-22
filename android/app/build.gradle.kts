@@ -308,23 +308,14 @@ val hostLibrary = tasks.register<BuildHostLibrary>("buildHostLibrary") {
         }
     })
 }
-val robolectricRuntimes = listOf("13-robolectric-9030017-i7", "15-robolectric-13954326-i7").map { version ->
-    configurations.create("robolectricAndroid${version.substringBefore('-')}") { isTransitive = false }.also {
-        dependencies.add(it.name, "org.robolectric:android-all-instrumented:$version")
-    }
-}
-val robolectricJars = tasks.register<Sync>("robolectricJars") {
-    from(robolectricRuntimes)
-    into(layout.buildDirectory.dir("robolectric"))
-}
 tasks.withType<Test>().configureEach {
     dependsOn(hostLibrary)
-    inputs.files(robolectricJars)
     systemProperty("jna.library.path",
         layout.buildDirectory.dir("rust-host-library/debug").get().asFile.absolutePath)
-    systemProperty("robolectric.offline", "true")
-    systemProperty("robolectric.dependency.dir",
-        layout.buildDirectory.dir("robolectric").get().asFile.absolutePath)
+    // Maven Central answers CI runners with HTTP 429 for Robolectric's
+    // android-all jars; Google's mirror of Central serves the same files.
+    systemProperty("robolectric.dependency.repo.id", "google-maven-central")
+    systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2")
 }
 
 abstract class CopyNativeNotices : DefaultTask() {
