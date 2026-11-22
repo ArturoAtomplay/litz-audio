@@ -1,12 +1,15 @@
 #!/bin/sh
 # Rewrite the license texts of the Rust crates each shipped binary is built
-# from, for the targets it is released for. The first run builds the pinned
-# cargo-about into target/tools.
+# from, for the targets it is released for. Unless the pinned cargo-about is on
+# PATH, the first run builds it into target/tools.
 # Usage: packaging/licenses.sh
 set -eu
 cd "$(dirname "$0")/.."
 version=0.9.3
-about=target/tools/bin/cargo-about
+about=cargo-about
+if [ "$("$about" --version 2>/dev/null)" != "cargo-about $version" ]; then
+  about=target/tools/bin/cargo-about
+fi
 if [ "$("$about" --version 2>/dev/null)" != "cargo-about $version" ]; then
   cargo install cargo-about --version "$version" --locked --features cli --root target/tools
 fi
