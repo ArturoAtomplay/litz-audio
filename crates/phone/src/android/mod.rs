@@ -111,8 +111,8 @@ pub fn log_panics() {
 }
 
 pub fn raise_thread_priority() {
+    // SAFETY: gettid has no preconditions.
+    let thread = unsafe { libc::gettid() };
     // SAFETY: adjusts only the calling thread; failure keeps the default.
-    unsafe {
-        libc::setpriority(libc::PRIO_PROCESS as _, libc::gettid() as _, -16);
-    }
+    unsafe { libc::setpriority(libc::PRIO_PROCESS as _, thread as _, -16) };
 }
